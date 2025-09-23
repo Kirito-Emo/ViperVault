@@ -1,0 +1,25 @@
+\section{Future Enhancements: Zero-Knowledge Proofs}
+	
+	Zero-Knowledge Proofs (ZKP) are not required in the current local-only architecture of ViperVault, since no server-side authentication or interaction exists.
+	However, once a synchronization backend and OTA update server are introduced, ZKP-based protocols can provide strong security and privacy advantages.
+	
+	\subsection{Potential Use Cases}
+		\begin{itemize}
+			\item \textbf{Server Authentication (Sync/Login)}: Instead of sending password-derived hashes to the server, ViperVault can implement a Password-Authenticated Key Exchange (PAKE) with ZK properties, such as OPAQUE.
+			This allows the client to prove knowledge of the master password without revealing it or any verifiable hash to the server.
+			\item \textbf{Vault Integrity Proofs}: Clients could prove that uploaded vaults are correctly encrypted under the right key, without disclosing the key itself.
+		\end{itemize}
+	
+	\subsection{Advantages}
+		\begin{itemize}
+			\item No password hashes or secrets ever stored on the server.
+			\item Protection against offline brute-force in case of server breach.
+			\item Strong alignment with Zero-Knowledge Architecture principles and GDPR/NIS2 minimization of personal data processing.
+			\item Clear FOSS trust signal: the server cannot know secrets even in hashed form.
+		\end{itemize}
+	
+	\subsection{Disadvantages}
+		\begin{itemize}
+			\item Increased implementation complexity, requiring reliable cryptographic libraries and careful protocol design.
+			\item Higher performance cost than traditional logins, especially on low-end devices.
+		\end{itemize}

@@ -1,0 +1,70 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage{float}
+\usepackage[utf8]{inputenc}
+\usepackage[left=1cm, right=2cm, top=3cm, bottom=3cm, bindingoffset=1cm]{geometry}
+\usepackage{csquotes}
+\usepackage{subfig}
+\usepackage{graphicx}
+\usepackage{fancyhdr}
+\usepackage{array}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tcolorbox}
+\usepackage{multicol}
+\usepackage{amssymb}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{titlesec}
+\usepackage{xcolor}
+
+% Drawings
+\usepackage{tikz}
+\usetikzlibrary{shapes, arrows, positioning, matrix, calc}
+
+% Metadata
+\title{\textbf{Threat Model for ViperVault}}
+\author{\textbf{Emanuele Relmi}}
+\date{}
+
+% Section formatting
+\linespread{1.5}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{\textbf{\nouppercase{\leftmark}}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{1pt}
+\renewcommand{\footrulewidth}{1pt}
+
+% Document
+\begin{document}
+	\maketitle
+	\vspace{1cm}
+	
+	\begin{abstract}
+		\noindent This document presents a comprehensive threat model for \textbf{ViperVault}, a password-manager application currently deployed as a native mobile client for Android and iOS.
+        The immediate goal of this model is to assess the risks that arise in the current \emph{local-only} configuration of the application, where all data is stored and encrypted directly on the user’s device, with no cloud interaction.
+        At the same time, the model anticipates the project’s long-term roadmap, which includes the release of desktop clients (Windows, macOS, Linux), browser extensions and the introduction of a cloud-based synchronization and update service.
+        To provide a structured and reproducible analysis, the identified threats are categorized using the \textbf{STRIDE} methodology, ensuring full alignment with industry standards in threat modeling.
+        Each threat is described in terms of adversarial action, assessed by likelihood and impact and paired with concrete mitigations that are feasible within the project’s constraints.
+        This approach makes it possible to distinguish between immediate device-level risks, such as clipboard hijacking or malware infection and more advanced future threats, such as man-in-the-middle attacks on synchronization, supply-chain compromises or state-sponsored adversaries targeting the backend infrastructure.
+        The threat model is further contextualized against major security and privacy frameworks, including \textbf{OWASP}, \textbf{NIST SP~800-63} and European regulatory standards such as \textbf{GDPR} and \textbf{NIS2}.
+        By embedding security- and privacy-by-design principles throughout the analysis, ViperVault establishes not only a defensive baseline for the present, but also a forward-looking foundation for sustainable and compliant growth.
+        In summary, this document serves both as a snapshot of the current security posture of ViperVault and as a living reference for guiding the project through its future evolution, ensuring that usability, security and regulatory compliance remain in balance at every stage.
+	\end{abstract}
+	
+	\newpage
+	\tableofcontents
+	\newpage
+
+% Sections
+	\include{Sections/wp1}
+	\include{Sections/wp2}
+	\include{Sections/wp3}
+	\include{Sections/wp4}
+	\include{Sections/wp5}
+	\include{Sections/wp6}
+	\include{Sections/wp7}
+
+% End
+\end{document}

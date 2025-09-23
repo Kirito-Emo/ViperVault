@@ -1,0 +1,19 @@
+\section{Scope and Assumptions}
+	
+	The scope of this threat model is defined around the current and future architecture of \textbf{ViperVault}.
+	At present, the application is deployed as a local-only installation on Android and iOS devices.
+	All credential data is stored directly on the device and protected through strong cryptographic mechanisms.
+	There is no network communication and no persistent cloud storage, which significantly reduces the remote attack surface.
+	Looking ahead, however, the project’s roadmap includes several major extensions: the release of desktop clients for Windows, macOS and Linux; the development of browser extensions to facilitate password autofill;  the addition of a cloud synchronization service to enable seamless access across devices.
+	These planned features will necessarily expand the system boundaries and introduce new classes of threats that must be considered from the outset.
+	In terms of adversaries, the model assumes a broad spectrum of potential threat actors.
+	These include opportunistic attackers exploiting common weaknesses, more sophisticated advanced persistent threats (APTs) conducting targeted campaigns, malicious insiders with privileged access and supply-chain adversaries attempting to compromise the build or distribution process.
+	The security goals of ViperVault are fourfold.
+	First, the confidentiality of all stored credentials must be preserved under every circumstance.
+	Second, the integrity of both the vault and its metadata must be ensured, preventing unauthorized tampering.
+	Third, the application must remain reliably available to legitimate users.
+	Finally, non-repudiation must be enforced for critical operations such as master-password changes, ensuring accountability for sensitive security events.
+	The cryptographic foundations of the system rest on well-established and modern primitives.
+	The vault is encrypted using the XChaCha20-Poly1305 algorithm, which offers strong authenticated encryption guarantees.
+	The master password is processed through Argon2id, a memory-hard key derivation function designed to resist GPU and ASIC cracking attempts.
+	All keys are derived exclusively on the user’s device and are never transmitted, in line with zero-knowledge design principles.

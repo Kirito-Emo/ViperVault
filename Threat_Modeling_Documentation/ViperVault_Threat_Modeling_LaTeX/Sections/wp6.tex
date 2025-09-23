@@ -1,0 +1,77 @@
+\section{Diagrams}
+	
+	\subsection{Current Architecture (Local-Only)}
+		\begin{center}
+			\resizebox{\textwidth}{!}{
+				\begin{tikzpicture}[node distance=4cm,>=latex, thick,
+					process/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.5cm, fill=blue!10},
+					store/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.5cm, fill=green!20}, arrow/.style={->, thick}
+				]
+					
+					% Nodes
+					\node[process] (user) {User};
+					\node[process, right=of user] (app) {ViperVault App};
+					\node[store, right=of app] (vault) {Encrypted Vault};
+					
+					% Arrows
+					\draw[arrow] (user) -- (app) node[midway, above]{Master Password};
+					\draw[arrow] (app) -- (vault) node[midway, above]{XChaCha20-Poly1305};
+				\end{tikzpicture}
+			}
+		\end{center}
+	
+	\subsection{Future Architecture (Cloud Sync + Updates)}
+		\begin{center}
+			\resizebox{\textwidth}{!}{
+				\begin{tikzpicture}
+					[node distance=4cm,>=latex, thick,
+					process/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.5cm, fill=blue!10},
+					store/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.5cm, fill=green!20},
+					server/.style={rectangle, draw, fill=orange!20, minimum height=1cm, minimum width=2.5cm},
+					doublearrow/.style={<->, thick, blue}
+					]
+					
+					% Nodes
+					\node[process] (user) {User};
+					\node[process, right=of user] (app) {ViperVault App};
+					\node[process, below=of app, yshift=-1cm] (kdf) {Argon2id KDF};
+					\node[process, right=of app, xshift=3.5cm] (server) {Sync/Update Server};
+					\node[store, below=of kdf, yshift=-1cm] (vault) {Encrypted Vault};
+					
+					% Arrows
+					\draw[->] (user) -- (app) node[midway, above]{Master Password};
+					\draw[->] (app) -- (kdf) node[midway, left]{Password-derived key};
+					\draw[->] (kdf) -- (vault) node[midway, left]{Local E2EE};
+					\draw[doublearrow] (app) -- (server) node[midway, above]{TLS 1.3 + E2EE (Sync)};
+					\draw[->, dashed] (server.north) .. controls +(up:1cm) and +(up:1cm) .. (app.north) node[midway, above]{Updates (signed binaries)};
+					
+					% Trust boundary
+					\draw[dashed, red] ($(app.north west)+(-0.5,0.5)$) rectangle ($(vault.south east)+(0.5,-0.5)$) node[anchor=north west, red]{Trusted Client};
+				\end{tikzpicture}
+			}
+		\end{center}
+	
+	\subsection{Encryption Flow}
+		\begin{center}
+			\resizebox{\textwidth}{!}{
+				\begin{tikzpicture}[>=latex, thick,
+					process/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.5cm, fill=blue!10},
+					store/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.5cm, fill=green!20},
+					arrow/.style={->, thick}
+				]
+					
+					% Nodes
+					\node[process] (pw) {Master Password};
+					\node[process, right=of pw] (kdf) {Argon2id KDF};
+					\node[process, right=of kdf] (key) {Derived Vault Key};
+					\node[process, right=of key] (crypto) {XChaCha20-Poly1305 Encryption};
+					\node[store, right=of crypto] (vault) {Encrypted Vault};
+					
+					% Arrows
+					\draw[arrow] (pw) -- (kdf);
+					\draw[arrow] (kdf) -- (key);
+					\draw[arrow] (key) -- (crypto);
+					\draw[arrow] (crypto) -- (vault);
+				\end{tikzpicture}
+			}
+		\end{center}

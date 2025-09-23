@@ -1,0 +1,95 @@
+\section{Threat Taxonomy (STRIDE)}
+	
+	\subsection{Spoofing}
+		\begin{center}
+			\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3cm} | X | c | c | X}
+				\toprule
+				\textbf{Threat} & \textbf{Description} & \textbf{Likelihood} & \textbf{Impact} & \textbf{Mitigations} \\
+				\midrule
+				Phishing / Fake App & User tricked into revealing master-password or installing malicious replica. & Medium & High & Code signing, app store integrity, MFA \\
+                \midrule
+				Biometric Spoofing & Synthetic fingerprint/face sample bypass sensors. & Low & High & Secure enclave validation, liveness detection \\
+                \midrule
+				WebAuthn Replay & Captured assertion reused. & Low & High & Nonce-based challenges, secure enclave keys \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+	
+	\subsection{Tampering}
+		\begin{center}
+			\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3cm} | X | c | c | X}
+				\toprule
+				\textbf{Threat} & \textbf{Description} & \textbf{Likelihood} & \textbf{Impact} & \textbf{Mitigations} \\
+				\midrule
+				Vault File Tampering & Malicious modification of local vault file. & Low & High & Integrity checks, authenticated encryption \\
+                \midrule
+				DLL / Library Hijacking & Malicious libraries injected. & Low & Medium & Signed libraries, secure load paths \\
+                \midrule
+				MITM on Sync & Intercept TLS traffic in future sync. & Low (future) & High & TLS 1.3 + certificate pinning \\
+                \midrule
+				Transparency-Log Forgery & Tampered update manifests. & Low & Critical & Transparency logs, signed manifests \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+	
+	\subsection{Repudiation}
+		\begin{center}
+			\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3cm} | X | c | c | X}
+				\toprule
+				\textbf{Threat} & \textbf{Description} & \textbf{Likelihood} & \textbf{Impact} & \textbf{Mitigations} \\
+				\midrule
+				Replay of Reset Tokens & Token reused to regain access. & Low & High & Expiry, signed tokens, vault re-encryption \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+	
+	\subsection{Information Disclosure}
+		\begin{center}
+			\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3cm} | X | c | c | X}
+				\toprule
+				\textbf{Threat} & \textbf{Description} & \textbf{Likelihood} & \textbf{Impact} & \textbf{Mitigations} \\
+				\midrule
+				Clipboard Hijacking & Malicious app reads clipboard. & Medium & Medium & Auto-clear clipboard, warnings \\
+                \midrule
+				Memory Dump / RAM Scraping & Keys extracted from memory. & Low & High & Secure enclave, memory wipe \\
+                \midrule
+				Unencrypted Backup & Vault stored without encryption. & Medium & High & Force client-side encryption \\
+                \midrule
+				XSS in Extension & Malicious script steals data. & Low (future) & High & Strict CSP, sandboxed extensions \\
+                \midrule
+				Side-Channel (Timing, Spectre) & Infer data via timing or speculative execution. & Low & High & Constant-time KDF, patched OS \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+	
+	\subsection{Denial of Service}
+		\begin{center}
+			\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3cm} | X | c | c | X}
+				\toprule
+				\textbf{Threat} & \textbf{Description} & \textbf{Likelihood} & \textbf{Impact} & \textbf{Mitigations} \\
+				\midrule
+				Brute Force Lockout & Automated guessing attempts. & Medium & High & KDF cost, rate-limiting \\
+                \midrule
+				Vault Write Races & Concurrent edits corrupt vault. & Medium & High & File locking, transactional writes \\
+                \midrule
+				Device Theft or Loss & Loss of unlocked device. & Medium & High & Auto-lock, remote wipe \\
+                \midrule
+				Overlay / Accessibility DoS & Malicious overlay prevents input. & Low & Medium & Overlay detection, secure flags \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+	
+	\subsection{Elevation of Privilege}
+		\begin{center}
+			\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3cm} | X | c | c | X}
+				\toprule
+				\textbf{Threat} & \textbf{Description} & \textbf{Likelihood} & \textbf{Impact} & \textbf{Mitigations} \\
+				\midrule
+				Privilege Escalation & Exploit escape from sandbox. & Low & High & OS hardening, least privilege \\
+                \midrule
+				Supply-Chain Compromise & Malicious dependency injected. & Low & High & Reproducible builds, signed updates \\
+                \midrule
+				State-Sponsored APT & Highly resourced adversary. & Low (future) & Critical & Post-quantum crypto, strict E2EE \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}

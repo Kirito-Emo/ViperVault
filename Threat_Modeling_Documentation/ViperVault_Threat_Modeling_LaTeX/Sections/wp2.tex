@@ -1,0 +1,32 @@
+\section{Alignment with Standards and Regulations}
+	
+	Security and privacy requirements do not exist in isolation: they are guided by community best practices, technical standards and legal frameworks.
+	This section places ViperVault in relation to the most relevant reference points, namely the OWASP guidelines, the NIST recommendations and European regulations such as GDPR and NIS2.
+	By aligning the threat model with these standards, the project demonstrates not only technical robustness but also regulatory compliance and long-term sustainability.
+	
+	\subsection{OWASP and NIST}
+		
+		ViperVault has been designed with explicit reference to the \textbf{OWASP Mobile Application Security Verification Standard (MASVS)} and the \textbf{Mobile Security Testing Guide (MSTG)}.
+		Core requirements such as secure credential storage (MASVS-STORAGE-2), strong and up-to-date cryptography, secure input handling and the wiping of sensitive information from memory are explicitly addressed.
+		This ensures that the application does not merely rely on cryptographic primitives but also respects best practices for their implementation and for the surrounding environment.
+		In addition, the application complies with recommendations from \textbf{NIST SP 800-63B} on digital authentication.
+		Specifically, the use of \textbf{Argon2id} as a memory-hard key derivation function satisfies the requirement to resist large-scale GPU or ASIC cracking attempts, while the password policy enforces sufficient entropy, prohibits commonly used secrets and mitigates risks associated with password reuse.
+		Together, these controls position ViperVault in line with modern expectations for secure identity and credential management.
+	
+	\subsection{GDPR}
+		
+		From a legal and privacy perspective, the design of ViperVault is strongly aligned with the \textbf{General Data Protection Regulation (GDPR)}.
+		The application follows the principle of \textbf{Privacy by Design}, meaning that it collects and processes only the minimum data required for its function.
+		All vault contents are encrypted client-side, no personal identifiers are stored in plaintext and no unnecessary telemetry or logs are generated.
+		The \textbf{right to erasure} is also inherently respected: once a vault is deleted, it is cryptographically unrecoverable, ensuring that the user retains full control over their data lifecycle.
+		Furthermore, the principle of \textbf{data minimization} is applied rigorously, with no additional metadata (such as usage statistics or access logs) being collected.
+		This not only protects users from privacy risks but also simplifies compliance with regulatory audits.
+	
+	\subsection{NIS2}
+		
+		Furthermore, ViperVault is compliant with the European \textbf{NIS2 Directive}, which expands cybersecurity obligations for digital service providers.
+		Even though the project is currently developed by a single developer, mechanisms are planned to support a security management lifecycle.
+		These include \textbf{reproducible builds} to ensure the integrity of released binaries, a process for responsible \textbf{vulnerability disclosure} and the use of \textbf{digitally signed updates} to prevent tampering.
+		In terms of incident response, the project prioritizes transparency and agility.
+		Public transparency logs ensure that update integrity can be independently verified and a lightweight process for rapid patching helps minimize exposure when new vulnerabilities are discovered.
+		In this way, even with limited resources, ViperVault can embody the spirit of NIS2: resilience, accountability and continuous improvement in security.

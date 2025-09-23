@@ -1,0 +1,15 @@
+\section{Proposed Improvements}
+	
+	The following enhancements are proposed to strengthen ViperVault’s security posture and to anticipate risks that may emerge as the application evolves. Each improvement is consistent with the principles of security-by-design and privacy-by-design, while remaining feasible for a project developed with limited resources.
+	
+	\begin{itemize}
+		\item \textbf{Duress / Panic Mode}: Introduce an optional mechanism that allows users to configure either a decoy vault or a dedicated “duress password.” This feature is intended for scenarios where a user is coerced into unlocking the application. Under such conditions, entering the duress password would open a harmless decoy vault, thereby protecting the true sensitive data.
+		
+		\item \textbf{Master Password Reset}: Reinforce the design principle that the master password cannot be trivially reset. In case of loss, the vault should remain inaccessible, which aligns with the zero-knowledge model. To provide a safety net, recovery codes could optionally be generated at first setup and securely stored offline by the user, ensuring that recovery remains possible without weakening overall security.
+		
+		\item \textbf{Accessibility Overlay Protection}: Implement controls to detect suspicious screen overlays or accessibility abuse. These overlays can be exploited to trick users into interacting with spoofed interfaces. By actively monitoring and blocking untrusted overlays, ViperVault can reduce the risk of visual spoofing and fraudulent input capture.
+		
+		\item \textbf{Secure Notifications}: Ensure that system notifications never reveal sensitive information. Instead of displaying usernames, vault labels or credential data, notifications should carry only opaque tokens or neutral text, thereby avoiding accidental data leakage through the operating system’s notification channels.
+		
+		\item \textbf{Anti-Forensics}: Strengthen resistance against forensic attempts by applying multiple safeguards. These include automatic memory wiping when the app is backgrounded, periodic clearing of the clipboard after use and anti-debugging checks that make it harder for adversaries to inspect the application during runtime.
+	\end{itemize}
