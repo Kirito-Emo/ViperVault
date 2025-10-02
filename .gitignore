@@ -1,0 +1,5 @@
+.idea
+.obsidian
+/Kanban_Obsidian/Technical_Dependencies.md
+/core/target
+/core/Cargo.lock
