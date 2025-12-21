@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to define an enum `EntryType`
+
 *So that* I can categorize and extend vault entries consistently.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* the enum `EntryType` is defined
-*When* an entry is assigned a type
-*Then* it is correctly categorized and serialized
+>
+> *When* an entry is assigned a type
+>
+> *Then* it is correctly categorized and serialized
+
 - **AC2:**
 > *Given* multiple entry types
-*When* entries are deserialized
-*Then* each entry maintains its correct type
+>
+> *When* entries are deserialized
+>
+> *Then* each entry maintains its correct type
 
 ## ✅ Definition of Done (DoD)
 - [ ] Enum implemented and compiled

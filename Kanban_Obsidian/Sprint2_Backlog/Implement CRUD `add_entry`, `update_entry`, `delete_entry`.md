@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* to add, update, and delete entries in the vault
+
 *So that* I can manage my secrets securely.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* an empty vault
-*When* a new entry is added
-*Then* it appears in the vault with correct type and metadata
+> 
+> *When* a new entry is added
+> 
+> *Then* it appears in the vault with correct type and metadata
+
 - **AC2:**
 > *Given* an existing entry
-*When* it is updated
-*Then* the entry’s data changes accordingly
+> 
+> *When* it is updated
+> 
+> *Then* the entry’s data changes accordingly
+
 - **AC3:**
 > *Given* an existing entry
-*When* it is deleted
-*Then* it is removed from the vault and memory is cleared
+> 
+> *When* it is deleted
+> 
+> *Then* it is removed from the vault and memory is cleared
 
 ## ✅ Definition of Done (DoD)
 - [ ] CRUD operations implemented

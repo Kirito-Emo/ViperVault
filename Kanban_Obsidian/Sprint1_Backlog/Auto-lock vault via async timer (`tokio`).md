@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* the vault to auto-lock after inactivity
+
 *So that* secrets remain safe if I leave my device unattended.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* the vault is unlocked
-*When* the idle timeout expires
-*Then* the vault automatically locks and clears sensitive memory
+> 
+> *When* the idle timeout expires
+> 
+> *Then* the vault automatically locks and clears sensitive memory
+
 - **AC2:**
 > *Given* a configurable timeout
-*When* the timeout value is changed
-*Then* the auto-lock triggers according to the new timeout
+> 
+> *When* the timeout value is changed
+> 
+> *Then* the auto-lock triggers according to the new timeout
+
 - **AC3:**
 > *Given* vault auto-lock triggers
-*When* an operation is attempted on the vault
-*Then* access is denied until the vault is unlocked
+> 
+> *When* an operation is attempted on the vault
+> 
+> *Then* access is denied until the vault is unlocked
 
 ## ✅ Definition of Done (DoD)
 - [ ] Auto-lock implemented with async timer

@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* to have a decoy vault triggered by a coercion password
+
 *So that* sensitive data is protected under forced access.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* the coercion password
-*When* the vault is unlocked
-*Then* the decoy vault opens without revealing real secrets
+>
+> *When* the vault is unlocked
+>
+> *Then* the decoy vault opens without revealing real secrets
+
 - **AC2:**
 > *Given* the decoy vault
-*When* data is modified
-*Then* real vault remains unaffected
+>
+> *When* data is modified
+>
+> *Then* real vault remains unaffected
 
 ## ✅ Definition of Done (DoD)
 - [ ] Decoy vault management implemented

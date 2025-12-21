@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* unit tests for Argon2id and XChaCha20-Poly1305
+
 *So that* cryptography behaves correctly and securely.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* valid inputs
-*When* tests are executed
-*Then* encryption/decryption and key derivation succeed
+>
+> *When* tests are executed
+>
+> *Then* encryption/decryption and key derivation succeed
+
 - **AC2:**
 > *Given* invalid or corrupted inputs
-*When* tests are executed
-*Then* appropriate errors are returned without leaking secrets
+>
+> *When* tests are executed
+>
+> *Then* appropriate errors are returned without leaking secrets
 
 ## ✅ Definition of Done (DoD)
 - [ ] Unit tests implemented

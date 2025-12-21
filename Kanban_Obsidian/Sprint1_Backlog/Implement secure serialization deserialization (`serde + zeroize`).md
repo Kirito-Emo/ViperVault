@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to serialize and deserialize the vault securely
+
 *So that* no secrets remain in memory longer than necessary.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (AC)
 - **AC1:**
 > *Given* a vault with entries
-*When* serialized and deserialized
-*Then* all data is intact and sensitive fields are zeroized
+> 
+> *When* serialized and deserialized
+> 
+> *Then* all data is intact and sensitive fields are zeroized
+
 - **AC2**:
 > *Given* a malformed vault file
-*When* deserialization is attempted
-*Then* an error is returned and memory buffers are cleared
+> 
+> *When* deserialization is attempted
+> 
+> *Then* an error is returned and memory buffers are cleared
 
 ## ✅ Definition of Done (DoD)
 - [ ] Serialization implemented for all vault fields

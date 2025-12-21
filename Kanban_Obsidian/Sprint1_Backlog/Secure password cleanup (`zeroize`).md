@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* all password strings securely erased after use
+
 *So that* no sensitive data remains in memory.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a master password or secret is in memory
-*When* it is no longer needed
-*Then* it is zeroized and removed from memory
+> 
+> *When* it is no longer needed
+> 
+> *Then* it is zeroized and removed from memory
+
 - **AC2:**
 > *Given* an unlocked vault
-*When* secrets are accessed and then released
-*Then* no plaintext remains in memory dumps or logs
+> 
+> *When* secrets are accessed and then released
+> 
+> *Then* no plaintext remains in memory dumps or logs
 
 ## ✅ Definition of Done (DoD)
 - [ ] Zeroize integrated for all secrets

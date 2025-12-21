@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* copied secrets to be automatically cleared from the clipboard
+
 *So that* sensitive data is not left exposed on my device.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a secret is copied to the clipboard
-*When* 30 seconds pass
-*Then* the clipboard is automatically cleared
+> 
+> *When* 30 seconds pass
+> 
+> *Then* the clipboard is automatically cleared
+
 - **AC2:**
 > *Given* the timeout is configured differently
-*When* the specified time elapses
-*Then* the clipboard clears according to the new timeout
+> 
+> *When* the specified time elapses
+> 
+> *Then* the clipboard clears according to the new timeout
 
 ## ✅ Definition of Done (DoD)
 - [ ] Clipboard auto-clear implemented

@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* vault entries to be validated
+
 *So that* only correctly formatted data is stored securely.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* an entry with valid data
-*When* it is added to the vault
-*Then* it is accepted and stored
+> 
+> *When* it is added to the vault
+> 
+> *Then* it is accepted and stored
+
 - **AC2:**
 > *Given* an entry with invalid data (e.g., too long, wrong charset)
-*When* it is added
-*Then* it is rejected with a validation error
+> 
+> *When* it is added
+> 
+> *Then* it is rejected with a validation error
 
 ## ✅ Definition of Done (DoD)
 - [ ] Validation logic implemented

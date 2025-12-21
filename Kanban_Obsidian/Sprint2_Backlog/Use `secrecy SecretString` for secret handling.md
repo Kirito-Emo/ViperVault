@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* secrets handled with `SecretString`
+
 *So that* sensitive data is protected in memory.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a secret is stored
-*When* SecretString is used
-*Then* it remains protected in memory and zeroized on drop
+> 
+> *When* SecretString is used
+> 
+> *Then* it remains protected in memory and zeroized on drop
+
 - **AC2:**
 > *Given* secrets are accessed
-*When* they go out of scope
-*Then* memory is cleared automatically
+> 
+> *When* they go out of scope
+> 
+> *Then* memory is cleared automatically
 
 ## ✅ Definition of Done (DoD)
 - [ ] SecretString used for all sensitive strings

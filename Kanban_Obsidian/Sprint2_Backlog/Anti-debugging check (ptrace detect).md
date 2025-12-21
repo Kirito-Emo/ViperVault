@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* security-conscious developer
+
 *I want* to detect if the process is being debugged
+
 *So that* sensitive operations are protected.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* the vault process runs
-*When* a debugger attaches
-*Then* the process detects the debugging attempt
+> 
+> *When* a debugger attaches
+> 
+> *Then* the process detects the debugging attempt
+
 - **AC2:**
 > *Given* debugging is detected
-*When* an operation on secrets is attempted
-*Then* the operation is blocked or memory cleared
+> 
+> *When* an operation on secrets is attempted
+> 
+> *Then* the operation is blocked or memory cleared
 
 ## ✅ Definition of Done (DoD)
 - [ ] Anti-debugging implemented

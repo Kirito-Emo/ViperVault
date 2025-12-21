@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* my master password securely converted into a key
+
 *So that* my vault is resilient against brute-force attacks.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (AC)
 - **AC1:**
 > *Given* a master password
-*When* key derivation is performed using Argon2id
-*Then* the derived key is unique, reproducible, and memory-zeroized after use
+> 
+> *When* key derivation is performed using Argon2id
+> 
+> *Then* the derived key is unique, reproducible, and memory-zeroized after use
+
 - **AC2:**
 > *Given* an incorrect password
-*When* attempting to unlock the vault
-*Then* access is denied without revealing information
+>
+> *When* attempting to unlock the vault
+>
+> *Then* access is denied without revealing information
 
 ## ✅ Definition of Done (DoD)
 - [ ] Argon2id implemented with secure defaults

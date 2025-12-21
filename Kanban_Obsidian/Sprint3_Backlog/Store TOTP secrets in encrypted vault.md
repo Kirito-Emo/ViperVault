@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* my TOTP secrets stored encrypted in the vault
+
 *So that* they remain confidential and protected.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a TOTP secret
-*When* stored in the vault
-*Then* it is encrypted and zeroized after use
+>
+> *When* stored in the vault
+>
+> *Then* it is encrypted and zeroized after use
+
 - **AC2:**
 > *Given* an encrypted vault
-*When* decrypted with the master password
-*Then* TOTP secrets are accessible and correct
+>
+> *When* decrypted with the master password
+>
+> *Then* TOTP secrets are accessible and correct
 
 ## ✅ Definition of Done (DoD)
 - [ ] Encrypted storage for TOTP secrets

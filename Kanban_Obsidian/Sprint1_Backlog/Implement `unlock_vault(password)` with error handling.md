@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* to unlock my vault with my master password
+
 *So that* I can securely access stored secrets.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* the vault is locked
-*When* the correct master password is provided
-*Then* the vault unlocks and secrets are accessible
+> 
+> *When* the correct master password is provided
+> 
+> *Then* the vault unlocks and secrets are accessible
+
 - **AC2:**
 > *Given* the vault is locked
-*When* an incorrect master password is provided
-*Then* the vault remains locked and an error is returned in constant time
+> 
+> *When* an incorrect master password is provided
+> 
+> *Then* the vault remains locked and an error is returned in constant time
+
 - **AC3:**
 > *Given* the vault has been unlocked
-*When* accessing secrets
-*Then* no sensitive data is leaked to logs or temporary memory
+> 
+> *When* accessing secrets
+> 
+> *Then* no sensitive data is leaked to logs or temporary memory
 
 ## ✅ Definition of Done (DoD)
 - [ ] Function implemented with secure error handling

@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* to unlock the vault using biometrics
+
 *So that* authentication is more convenient and secure.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a registered biometric credential
-*When* the user authenticates
-*Then* the vault unlocks securely
+>
+> *When* the user authenticates
+>
+> *Then* the vault unlocks securely
+
 - **AC2:**
 > *Given* biometric unlock fails
-*When* fallback password is provided
-*Then* the vault unlocks only if the password is correct
+>
+> *When* fallback password is provided
+>
+> *Then* the vault unlocks only if the password is correct
 
 ## ✅ Definition of Done (DoD)
 - [ ] Biometric FFI implemented

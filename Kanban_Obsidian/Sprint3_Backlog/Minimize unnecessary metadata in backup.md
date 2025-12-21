@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* backups to contain minimal metadata
+
 *So that* sensitive information is not leaked.
 
 ## 📌 Description
@@ -10,12 +14,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a vault backup
-*When* exported
-*Then* only necessary metadata is included
+>
+> *When* exported
+>
+> *Then* only necessary metadata is included
+
 - **AC2:**
 > *Given* sensitive internal metadata
-*When* backup occurs
-*Then* it is excluded from the exported file
+>
+> *When* backup occurs
+>
+> *Then* it is excluded from the exported file
 
 ## ✅ Definition of Done (DoD)
 - [ ] Metadata minimization implemented

@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to perform fuzzing on vault parsing and serialization
+
 *So that* malformed inputs cannot crash the vault or leak secrets.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* random/malformed input
-*When* parsed or deserialized
-*Then* vault either parses correctly or returns a safe error
+>
+> *When* parsed or deserialized
+>
+> *Then* vault either parses correctly or returns a safe error
+
 - **AC2:**
 > *Given* a fuzzed vault
-*When* operations are attempted
-*Then* no secrets are leaked and process remains stable
+>
+> *When* operations are attempted
+>
+> *Then* no secrets are leaked and process remains stable
 
 ## ✅ Definition of Done (DoD)
 - [ ] Fuzzing tests implemented

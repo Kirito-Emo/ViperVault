@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* an alternative key derivation for duress mode
+
 *So that* I can unlock a decoy vault under coercion.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a duress password
-*When* the vault is unlocked with it
-*Then* a decoy vault is returned containing only non-sensitive entries
+>
+> *When* the vault is unlocked with it
+>
+> *Then* a decoy vault is returned containing only non-sensitive entries
+
 - **AC2:**
 > *Given* the master password
-*When* used to unlock the vault
-*Then* the real vault is returned
+>
+> *When* used to unlock the vault
+>
+> *Then* the real vault is returned
+
 - **AC3:**
 > *Given* the decoy vault is unlocked
-*When* an entry is added
-*Then* it is stored only in the decoy vault
+>
+> *When* an entry is added
+>
+> *Then* it is stored only in the decoy vault
 
 ## ✅ Definition of Done (DoD)
 - [ ] Duress mode derivation implemented

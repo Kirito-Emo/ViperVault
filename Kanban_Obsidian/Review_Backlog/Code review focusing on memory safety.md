@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to review the code for memory safety
+
 *So that* there are no leaks, unsafe operations, or vulnerabilities.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* all Rust core code
-*When* memory safety review is performed
-*Then* unsafe code is minimized and justified
+> 
+> *When* memory safety review is performed
+> 
+> *Then* unsafe code is minimized and justified
+
 - **AC2:**
 > *Given* secrets stored in memory
-*When* objects are dropped
-*Then* memory is zeroized securely
+> 
+> *When* objects are dropped
+> 
+> *Then* memory is zeroized securely
+
 - **AC3:**
 > *Given* unsafe code or potential leaks
-*When* review identifies them
-*Then* corrective actions are implemented
+> 
+> *When* review identifies them
+> 
+> *Then* corrective actions are implemented
 
 ## ✅ Definition of Done (DoD)
 - [ ] Memory safety review completed

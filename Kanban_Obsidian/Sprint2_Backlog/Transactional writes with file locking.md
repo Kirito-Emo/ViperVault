@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* vault writes to be transactional
+
 *So that* concurrent operations do not corrupt the vault.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* multiple concurrent writes
-*When* entries are added/updated/deleted
-*Then* file locks prevent corruption and operations succeed atomically
+> 
+> *When* entries are added/updated/deleted
+> 
+> *Then* file locks prevent corruption and operations succeed atomically
+
 - **AC2:**
 > *Given* a write fails mid-operation
-*When* the vault is closed
-*Then* no partial data is written, vault integrity preserved
+> 
+> *When* the vault is closed
+> 
+> *Then* no partial data is written, vault integrity preserved
 
 ## ✅ Definition of Done (DoD)
 - [ ] Transactional writes implemented

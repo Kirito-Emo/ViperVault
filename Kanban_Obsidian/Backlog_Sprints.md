@@ -7,12 +7,12 @@ kanban-plugin: basic
 ## Sprint 1 – Core Foundations
 
 - [ ] [[Define `Vault` structure (UUID, versioning, metadata)]]
-- [ ] [[Implement secure serialization deserialization (`serde + zeroize`)]]
 - [ ] [[Derive master key from master password with Argon2id]]
 - [ ] [[Apply `XChaCha20-Poly1305` authenticated encryption]]
 - [ ] [[Implement `unlock_vault(password)` with error handling]]
-- [ ] [[Auto-lock vault via async timer (`tokio`)]]
 - [ ] [[Secure password cleanup (`zeroize`)]]
+- [ ] [[Auto-lock vault via async timer (`tokio`)]]
+- [ ] [[Implement secure serialization deserialization (`serde + zeroize`)]]
 - [ ] [[Unit test  create open close encrypted vault]]
 
 

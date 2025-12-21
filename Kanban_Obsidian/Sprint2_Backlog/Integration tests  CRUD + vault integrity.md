@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* integration tests for CRUD operations
+
 *So that* vault integrity is verified end-to-end.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a set of entries
-*When* CRUD operations are performed
-*Then* vault data remains correct and consistent
+> 
+> *When* CRUD operations are performed
+> 
+> *Then* vault data remains correct and consistent
+
 - **AC2:**
 > *Given* concurrent operations
-*When* transactions occur
-*Then* vault integrity is preserved without corruption
+> 
+> *When* transactions occur
+> 
+> *Then* vault integrity is preserved without corruption
 
 ## ✅ Definition of Done (DoD)
 - [ ] Integration tests implemented

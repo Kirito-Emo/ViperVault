@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to review the API design of the Rust core
+
 *So that* the core is consistent, extensible, and secure.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* the Rust core API
-*When* the API is reviewed
-*Then* all functions and structs follow consistent naming and style
+> 
+> *When* the API is reviewed
+> 
+> *Then* all functions and structs follow consistent naming and style
+
 - **AC2:**
 > *Given* potential API changes
-*When* documented
-*Then* they are agreed upon by the team
+> 
+> *When* documented
+> 
+> *Then* they are agreed upon by the team
+
 - **AC3:**
 > *Given* user-facing API functions
-*When* reviewed
-*Then* safety and usability issues are identified and resolved
+> 
+> *When* reviewed
+> 
+> *Then* safety and usability issues are identified and resolved
 
 ## ✅ Definition of Done (DoD)
 - [ ] API reviewed for consistency and style

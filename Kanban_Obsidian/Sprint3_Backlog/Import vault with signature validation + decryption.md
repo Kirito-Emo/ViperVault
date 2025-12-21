@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* to import a vault from a `.vlt` file with signature validation
+
 *So that* I can safely restore my encrypted data.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a `.vlt` file with valid signature
-*When* imported
-*Then* the vault is restored correctly
+>
+> *When* imported
+>
+> *Then* the vault is restored correctly
+
 - **AC2:**
 > *Given* a file with invalid signature
-*When* imported
-*Then* an error is returned and data is not loaded
+>
+> *When* imported
+>
+> *Then* an error is returned and data is not loaded
 
 ## ✅ Definition of Done (DoD)
 - [ ] Import function implemented

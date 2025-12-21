@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* user
+
 *I want* to use TOTP/HOTP for MFA
+
 *So that* I can add an additional layer of authentication.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a TOTP secret
-*When* generating a token
-*Then* a valid one-time password is produced according to RFC 6238
+>
+> *When* generating a token
+>
+> *Then* a valid one-time password is produced according to RFC 6238
+
 - **AC2:**
 > *Given* a HOTP secret
-*When* generating a counter-based token
-*Then* the token increments correctly
+>
+> *When* generating a counter-based token
+>
+> *Then* the token increments correctly
+
 - **AC3:**
 > *Given* secrets stored in vault
-*When* vault is encrypted
-*Then* TOTP/HOTP secrets are protected
+>
+> *When* vault is encrypted
+>
+> *Then* TOTP/HOTP secrets are protected
 
 ## ✅ Definition of Done (DoD)
 - [ ] TOTP/HOTP integration implemented

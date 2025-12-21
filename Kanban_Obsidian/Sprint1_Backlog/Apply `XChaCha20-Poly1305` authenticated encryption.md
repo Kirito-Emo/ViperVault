@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to encrypt vault data with authenticated encryption
+
 *So that* no attacker can read or tamper with my secrets.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a vault to encrypt
-*When* XChaCha20-Poly1305 is applied
-*Then* ciphertext is generated with a unique nonce and can be decrypted correctly
+> 
+> *When* XChaCha20-Poly1305 is applied
+> 
+> *Then* ciphertext is generated with a unique nonce and can be decrypted correctly
+
 - **AC2:**
 > *Given* corrupted ciphertext
-*When* decryption is attempted
-*Then* an integrity error is returned and plaintext is not revealed
+> 
+> *When* decryption is attempted
+> 
+> *Then* an integrity error is returned and plaintext is not revealed
 
 ## ✅ Definition of Done (DoD)
 - [ ] Encryption/decryption implemented

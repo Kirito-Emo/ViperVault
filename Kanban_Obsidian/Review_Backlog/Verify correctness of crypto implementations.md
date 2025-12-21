@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to verify the correctness of cryptographic implementations
+
 *So that* encryption, decryption, and key derivation are secure.
 
 ## 📌 Description
@@ -11,16 +15,24 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* cryptographic primitives
-*When* unit tests run
-*Then* outputs match RFC/test vectors
+> 
+> *When* unit tests run
+> 
+> *Then* outputs match RFC/test vectors
+
 - **AC2:**
 > *Given* encrypted data
-*When* decrypted with correct keys
-*Then* original plaintext is recovered
+>
+> *When* decrypted with correct keys
+>
+> *Then* original plaintext is recovered
+
 - **AC3:**
 > *Given* incorrect keys or tampered data
-*When* decryption is attempted
-*Then* an error is returned and no data is leaked
+> 
+> *When* decryption is attempted
+> 
+> *Then* an error is returned and no data is leaked
 
 ## ✅ Definition of Done (DoD)
 - [ ] Unit tests for all cryptographic primitives

@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* to define a secure and extensible vault data structure
+
 *So that* all sensitive entries can be stored consistently and safely.
 
 ## 📌 Description
@@ -12,16 +16,24 @@
 ## ✅ Acceptance Criteria (AC)
 - **AC1:** 
 > *Given* an empty vault
-*When* the Vault struct is created
-*Then* it contains valid metadata and no entries
+> 
+> *When* the Vault struct is created
+> 
+> *Then* it contains valid metadata and no entries
+
 - **AC2:**
 > *Given* multiple entry types
-*When* entries are added to the vault
-*Then* they are correctly categorized by EntryType enum
+>
+> *When* entries are added to the vault
+>
+> *Then* they are correctly categorized by EntryType enum
+
 - **AC3:**
 > *Given* the Vault struct is serialized
-*When* deserialized
-*Then* all sensitive fields are zeroized and data integrity is preserved
+> 
+> *When* deserialized
+> 
+> *Then* all sensitive fields are zeroized and data integrity is preserved
 
 ## ✅ Definition of Done (DoD)
 - [ ] `Vault` struct defined and compiled

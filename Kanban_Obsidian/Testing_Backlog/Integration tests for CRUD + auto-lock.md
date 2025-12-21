@@ -1,6 +1,10 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2025 Emanuele Relmi -->
 ## 🧑‍💻 User Story
 *As a* developer
+
 *I want* integration tests for CRUD operations and auto-lock
+
 *So that* vault functionality is verified end-to-end.
 
 ## 📌 Description
@@ -11,12 +15,17 @@
 ## ✅ Acceptance Criteria (Given/When/Then)
 - **AC1:**
 > *Given* a set of vault entries
-*When* CRUD operations are performed
-*Then* data integrity is preserved
+>
+> *When* CRUD operations are performed
+>
+> *Then* data integrity is preserved
+
 - **AC2:**
 > *Given* the vault is unlocked
-*When* idle timeout expires
-*Then* vault locks automatically and memory is cleared
+>
+> *When* idle timeout expires
+>
+> *Then* vault locks automatically and memory is cleared
 
 ## ✅ Definition of Done (DoD)
 - [ ] Integration tests implemented
