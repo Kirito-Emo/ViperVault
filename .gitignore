@@ -1,5 +1,9 @@
 .idea
 .obsidian
 /Kanban_Obsidian/Technical_Dependencies.md
-/core/target
+/core/target/
 /core/Cargo.lock
+/core/crates/vipervault-core/target/
+/core/crates/vipervault-core/Cargo.lock
+/core/crates/vipervault-app/target/
+/core/crates/vipervault-app/Cargo.lock

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2025 Emanuele Relmi
+
+[workspace]
+members = [
+    "crates/vipervault-core",
+    "crates/vipervault-app",
+]
+resolver = "2"
+
+[profile.dev]
+opt-level = 0               # No optimization
+debug = true                # Include debug info
+split-debuginfo = '...'     # Platform-specific
+debug-assertions = true     # Enable debug assertions
+overflow-checks = true      # Enable overflow checks
+lto = false                 # Disable Link Time Optimization
+panic = 'unwind'            # Set panic strategy to unwind
+incremental = true          # Enable incremental compilation
+codegen-units = 256         # Codegen units for faster compilation
+rpath = false               # Disable rpath
+
+[profile.release]
+opt-level = 3               # Optimize for speed
+debug = false               # No debug info
+debug-assertions = false    # Disable debug assertions
+overflow-checks = false     # Disable overflow checks
+lto = false                 # Disable Link Time Optimization
+panic = "unwind"            # Set panic strategy to unwind
+incremental = false         # Disable incremental compilation
+codegen-units = 16          # Codegen units for faster compilation
+rpath = false               # Disable rpath

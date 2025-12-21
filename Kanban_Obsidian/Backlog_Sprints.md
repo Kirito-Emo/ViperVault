@@ -1,19 +1,11 @@
 ---
 
-kanban-plugin: basic
+kanban-plugin: board
 
 ---
 
 ## Sprint 1 – Core Foundations
 
-- [ ] [[Define `Vault` structure (UUID, versioning, metadata)]]
-- [ ] [[Derive master key from master password with Argon2id]]
-- [ ] [[Apply `XChaCha20-Poly1305` authenticated encryption]]
-- [ ] [[Implement `unlock_vault(password)` with error handling]]
-- [ ] [[Secure password cleanup (`zeroize`)]]
-- [ ] [[Auto-lock vault via async timer (`tokio`)]]
-- [ ] [[Implement secure serialization deserialization (`serde + zeroize`)]]
-- [ ] [[Unit test  create open close encrypted vault]]
 
 
 ## Sprint 2 – Vault Management & Local Security
@@ -60,12 +52,22 @@ kanban-plugin: basic
 
 ## Done
 
+**Complete**
+
+- [x] [[Define `Vault` structure (UUID, versioning, metadata)]]
+- [x] [[Derive master key from master password with Argon2id]]
+- [x] [[Apply `XChaCha20-Poly1305` authenticated encryption]]
+- [x] [[Implement secure serialization deserialization (`serde + zeroize`)]]
+- [x] [[Implement `unlock_vault(password)` with error handling]]
+- [x] [[Secure password cleanup (`zeroize`)]]
+- [x] [[Auto-lock vault via async timer (`tokio`)]]
+- [x] [[Unit test  create open close encrypted vault]]
 
 
 
 
 %% kanban:settings
 ```
-{"kanban-plugin":"basic"}
+{"kanban-plugin":"board","list-collapse":[null,null,null,null,null,false]}
 ```
 %%
