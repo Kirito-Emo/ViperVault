@@ -1,51 +1,73 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-use std::io;
+//! Vault errors
+//!
+//! This module defines all errors related to vault parsing, encoding and on-disk storage operations
 
-/// Errors returned while parsing/serializing the vault container.
-///
-/// # Security
-/// Errors are intentionally generic to avoid leaking details.
-#[derive(Debug, thiserror::Error)]
+use std::io;
+use thiserror::Error;
+
+/// Errors while parsing or encoding vault structures
+#[derive(Debug, Error)]
 pub enum VaultParseError {
-    /// The container magic does not match the expected value.
+    /// Magic bytes do not match the expected vault format
     #[error("invalid magic")]
     InvalidMagic,
 
-    /// The container format version is unsupported.
+    /// Vault format version is not supported by this build
     #[error("unsupported format version")]
     UnsupportedVersion,
 
-    /// The payload storage mode is unsupported.
+    /// Storage mode is plaintext but plaintext vaults are not allowed
+    #[error("plaintext storage mode is not allowed")]
+    PlaintextNotAllowed,
+
+    /// Storage mode is not recognized or not supported
     #[error("unsupported storage mode")]
     UnsupportedStorageMode,
 
-    /// Plaintext payloads are not allowed in this context.
-    #[error("plaintext mode not allowed")]
-    PlaintextNotAllowed,
-
-    /// The serialized header exceeds hard bounds.
+    /// Vault header exceeds the maximum allowed size
     #[error("header too large")]
     HeaderTooLarge,
 
-    /// The payload exceeds hard bounds.
+    /// Encrypted payload exceeds the maximum allowed size
     #[error("payload too large")]
     PayloadTooLarge,
 
-    /// The file contains extra trailing bytes (tampering/padding).
-    #[error("trailing bytes detected")]
+    /// Ciphertext exceeds allowed bounds
+    #[error("ciphertext too large")]
+    CiphertextTooLarge,
+
+    /// Extra unexpected bytes found after decoding the vault
+    #[error("trailing bytes after vault data")]
     TrailingBytes,
 
-    /// An I/O error occurred.
+    /// I/O error during parsing or encoding
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 
-    /// JSON encode/serialize failed.
+    /// Serialization failure
     #[error("serialize error")]
     Serialize,
 
-    /// JSON decode/deserialize failed.
+    /// Deserialization failure
     #[error("deserialize error")]
     Deserialize,
+}
+
+/// Errors while reading or writing vault files on disk
+#[derive(Debug, Error)]
+pub enum VaultStorageError {
+    /// Provided path is invalid or has no parent directory
+    #[error("invalid path")]
+    InvalidPath,
+
+    /// I/O error during file operations
+    #[error("io error: {0}")]
+    Io(io::Error),
+
+    /// File lock acquisition or release failed
+    #[error("file lock error: {0}")]
+    Lock(io::Error),
 }

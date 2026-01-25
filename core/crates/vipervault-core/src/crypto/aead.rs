@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+//! Authenticated encryption (AEAD)
+
+use crate::memory::KeyMaterial;
+use crate::vault::XCHACHA20_NONCE_LEN;
+use chacha20poly1305::aead::{Aead, Payload};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
-use zeroize::{Zeroize, Zeroizing};
-
-use crate::crypto::kdf::MASTER_KEY_LEN;
-use crate::vault::XCHACHA20_NONCE_LEN;
+use zeroize::Zeroizing;
 
 /// Errors returned by the AEAD layer
 ///
@@ -17,7 +18,7 @@ use crate::vault::XCHACHA20_NONCE_LEN;
 #[derive(Debug, thiserror::Error)]
 pub enum AeadError {
     /// OS RNG failure (extremely rare)
-    #[error("os rng error")]
+    #[error("os rng failure")]
     OsRng,
 
     /// Encryption failed
@@ -27,14 +28,6 @@ pub enum AeadError {
     /// Decryption failed (wrong key or tampered ciphertext/AAD)
     #[error("decryption error")]
     Decrypt,
-
-    /// Invalid nonce length
-    #[error("invalid nonce")]
-    InvalidNonce,
-
-    /// Invalid key length
-    #[error("invalid key")]
-    InvalidKey,
 }
 
 /// Generates a fresh random XChaCha20-Poly1305 nonce
@@ -71,12 +64,12 @@ pub fn generate_xchacha20_nonce() -> Result<[u8; XCHACHA20_NONCE_LEN], AeadError
 /// # Errors
 /// Returns [`AeadError::Encrypt`] on failure
 pub fn encrypt_xchacha20poly1305(
-    master_key: &Zeroizing<[u8; MASTER_KEY_LEN]>,
+    key: &KeyMaterial,
     nonce: &[u8; XCHACHA20_NONCE_LEN],
     plaintext: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>, AeadError> {
-    let cipher = xchacha_cipher_from_key(master_key)?;
+    let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
     let xnonce = XNonce::from_slice(nonce);
 
     cipher
@@ -99,7 +92,7 @@ pub fn encrypt_xchacha20poly1305(
 /// - `aad`: associated data that must match exactly (e.g., serialized header bytes)
 ///
 /// # Returns
-/// Plaintext wrapped in [`Zeroizing`] to wipe it on drop
+/// Plaintext wrapped in `Zeroizing<Vec<u8>>`
 ///
 /// # Security
 /// - If either ciphertext or AAD is modified, decryption fails
@@ -108,12 +101,12 @@ pub fn encrypt_xchacha20poly1305(
 /// # Errors
 /// Returns [`AeadError::Decrypt`] if authentication fails (wrong key/tampering)
 pub fn decrypt_xchacha20poly1305(
-    master_key: &Zeroizing<[u8; MASTER_KEY_LEN]>,
+    key: &KeyMaterial,
     nonce: &[u8; XCHACHA20_NONCE_LEN],
     ciphertext: &[u8],
     aad: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, AeadError> {
-    let cipher = xchacha_cipher_from_key(master_key)?;
+    let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
     let xnonce = XNonce::from_slice(nonce);
 
     let pt = cipher
@@ -127,27 +120,4 @@ pub fn decrypt_xchacha20poly1305(
         .map_err(|_| AeadError::Decrypt)?;
 
     Ok(Zeroizing::new(pt))
-}
-
-/// Creates an XChaCha20-Poly1305 cipher instance from a 32-byte master key
-///
-/// # Errors
-/// Returns [`AeadError::InvalidKey`] if the key is malformed (should not happen with correct KDF)
-fn xchacha_cipher_from_key(
-    master_key: &Zeroizing<[u8; MASTER_KEY_LEN]>,
-) -> Result<XChaCha20Poly1305, AeadError> {
-    // Ensure the key length matches the AEAD suite requirement
-    if MASTER_KEY_LEN != 32 {
-        return Err(AeadError::InvalidKey);
-    }
-
-    // Copy into a temporary Key type (wiped afterward)
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(master_key.as_ref());
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
-
-    // Wipe temporary key bytes (master_key itself is already Zeroizing)
-    key_bytes.zeroize();
-
-    Ok(cipher)
 }

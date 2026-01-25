@@ -152,12 +152,12 @@ pub enum AeadSuite {
     XChaCha20Poly1305,
 }
 
-/// Decrypted vault payload (encrypted at rest)
+/// Decrypted vault content
 ///
 /// # Security
-/// This structure must never be written to disk unencrypted unless user explicitly exports plaintext
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// This structure is serialized to JSON only inside the trusted boundary: after decrypt / before encrypt
+#[derive(Debug, Serialize, Deserialize)]
 pub struct VaultPayload {
-    /// Placeholder for entries/records.
-    pub entries: Vec<u8>,
+    /// All vault entries
+    pub entries: Vec<crate::entries::VaultEntry>,
 }

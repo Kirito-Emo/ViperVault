@@ -1,22 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
+use crate::core::allow_export_under_soft_policy;
 use crate::vault::{
     MAGIC, MAX_HEADER_LEN, ParsedVaultFile, StorageMode, VaultHeader, VaultParseError, VaultStorage,
 };
 use std::io::{Read, Write};
 use zeroize::{Zeroize, Zeroizing};
 
-/// Encodes a vault container as:
-/// `MAGIC(4) | FORMAT_VERSION(u16 LE) | STORAGE_MODE(u8) | HEADER_LEN(u32 LE) | HEADER_JSON | PAYLOAD_LEN(u64 LE) | PAYLOAD`
+/// Encode a vault container
 ///
 /// # Security
-/// - This module only packs/unpacks bytes
-/// - Encryption is handled elsewhere
-/// - Temporary buffers are wiped on drop where relevant
-///
-/// # Errors
-/// Returns [`VaultParseError`] on unsupported versions, serialization failure, or size violations
+/// - Plaintext export is denied under the anti-debug soft policy
 pub fn encode_vault_storage(
     header: &VaultHeader,
     storage: &VaultStorage,
@@ -24,6 +19,11 @@ pub fn encode_vault_storage(
 ) -> Result<Vec<u8>, VaultParseError> {
     if format_version == 0 {
         return Err(VaultParseError::UnsupportedVersion);
+    }
+
+    // Enforce soft policy on plaintext export
+    if matches!(storage, VaultStorage::PlaintextJson { .. }) && !allow_export_under_soft_policy() {
+        return Err(VaultParseError::PlaintextNotAllowed);
     }
 
     let (mode, payload_bytes) = match storage {
@@ -60,12 +60,8 @@ pub fn encode_vault_storage(
 /// - `allow_plaintext`: if false, plaintext payloads are rejected
 ///
 /// # Security
-/// - Length-prefixed parsing + hard bounds
-/// - Rejects trailing bytes (tampering/padding)
-/// - Returns raw `header_bytes` for AEAD AAD usage (JSON is not canonical)
-///
-/// # Errors
-/// Returns [`VaultParseError`] on invalid input, unsupported modes, bounds violations, or tampering
+/// - Plaintext payloads are rejected under soft policy
+/// - Header bytes are preserved for AEAD AAD usage
 pub fn decode_vault_file(
     mut input: impl Read,
     expected_format_version: Option<u16>,
@@ -95,7 +91,7 @@ pub fn decode_vault_file(
     let mode = match storage_mode_raw {
         1 => StorageMode::Encrypted,
         2 => {
-            if !allow_plaintext {
+            if !allow_plaintext || !allow_export_under_soft_policy() {
                 return Err(VaultParseError::PlaintextNotAllowed);
             }
             StorageMode::PlaintextJson
@@ -112,9 +108,7 @@ pub fn decode_vault_file(
     // HEADER_JSON (read into a zeroizing buffer)
     let mut header_buf: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; header_len as usize]);
     input.read_exact(&mut header_buf)?;
-
-    // Keep exact header bytes for AEAD AAD (JSON is not canonical)
-    let header_bytes: Vec<u8> = header_buf.to_vec();
+    let header_bytes = header_buf.to_vec();
 
     let header = match deserialize_header_json(&header_buf) {
         Ok(h) => h,
@@ -136,10 +130,8 @@ pub fn decode_vault_file(
 
     // Reject trailing bytes (tampering/padding)
     let mut extra = [0u8; 1];
-    match input.read(&mut extra) {
-        Ok(0) => {}
-        Ok(_) => return Err(VaultParseError::TrailingBytes),
-        Err(e) => return Err(VaultParseError::Io(e)),
+    if input.read(&mut extra)? != 0 {
+        return Err(VaultParseError::TrailingBytes);
     }
 
     Ok(ParsedVaultFile {
@@ -151,11 +143,19 @@ pub fn decode_vault_file(
     })
 }
 
-/// Convenience helper: writes a vault container to a writer
+/// Convenience helper: encode and write a vault container to a writer
+///
+/// # Security
+/// - This function does NOT bypass any security policy
+/// - Plaintext export is still subject to anti-debug soft policy checks enforced by [`encode_vault_storage`]
+///
+/// # Intended usage
+/// - Internal helper for writing vault data to files, buffers or tests
+/// - Must not be treated as a user-facing "export" API
 ///
 /// # Errors
-/// Returns [`VaultParseError`] if encoding fails or the writer fails
-pub fn write_vault_storage(
+/// Returns [`VaultParseError`] if encoding or writing fails
+pub(crate) fn write_vault_storage(
     mut out: impl Write,
     header: &VaultHeader,
     storage: &VaultStorage,
@@ -167,9 +167,6 @@ pub fn write_vault_storage(
 }
 
 /// Serializes a header into JSON bytes
-///
-/// # Notes
-/// JSON is not canonical; for AEAD AAD use the raw bytes stored in the file
 fn serialize_header_json(header: &VaultHeader) -> Result<Vec<u8>, VaultParseError> {
     serde_json::to_vec(header).map_err(|_| VaultParseError::Serialize)
 }

@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
+use crate::core::clamp_auto_lock_timeout_under_soft_policy;
+use crate::vault::VaultPayload;
 use std::sync::Arc;
 use std::time::Duration;
-
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use zeroize::Zeroizing;
-
-use crate::vault::VaultPayload;
 
 /// Represents the runtime state of the vault
 ///
@@ -18,11 +17,8 @@ use crate::vault::VaultPayload;
 /// - Bytes are wrapped in `Zeroizing` so they are wiped on lock/timeout/drop
 #[derive(Debug)]
 pub enum VaultState {
-    /// Vault is locked; no decrypted secrets in memory
-    Locked,
-
-    /// Vault is unlocked; decrypted payload JSON is held in memory
-    Unlocked { plaintext_json: Zeroizing<Vec<u8>> },
+    Locked, // Vault is locked; no decrypted secrets in memory
+    Unlocked { plaintext_json: Zeroizing<Vec<u8>> }, // Vault is unlocked; decrypted payload JSON is held in memory
 }
 
 /// Manages vault locking and auto-lock behavior
@@ -31,6 +27,7 @@ pub enum VaultState {
 /// - Auto-lock timer wipes decrypted memory
 /// - All state transitions go through this type
 /// - The timer can be reset via `notify_activity()`
+/// - Under debugging (soft policy) the auto-lock timeout is clamped to reduce exposure
 pub struct VaultLockManager {
     state: Arc<Mutex<VaultState>>,
     notify: Arc<Notify>,
@@ -53,6 +50,7 @@ impl VaultLockManager {
     /// # Security
     /// - Any previously unlocked state is dropped (wiped)
     /// - Timer resets on unlock
+    /// - Under debugging (soft policy), `timeout` may be clamped
     pub async fn unlock_with_plaintext_json(&self, plaintext_json: Vec<u8>, timeout: Duration) {
         {
             let mut state = self.state.lock().await;
@@ -61,7 +59,10 @@ impl VaultLockManager {
             };
         }
 
-        self.restart_auto_lock(timeout).await;
+        // Apply soft policy: shorten exposure window if a debugger is detected
+        let effective_timeout = clamp_auto_lock_timeout_under_soft_policy(timeout);
+
+        self.restart_auto_lock(effective_timeout).await;
     }
 
     /// Returns the decrypted payload if unlocked
@@ -126,5 +127,50 @@ impl VaultLockManager {
         });
 
         *self.auto_lock_task.lock().await = Some(task);
+    }
+
+    /// Execute a mutable operation on the decrypted payload
+    ///
+    /// # Security
+    /// The payload is deserialized from `plaintext_json`, mutated, then immediately
+    /// re-serialized back into `plaintext_json`
+    pub(crate) async fn with_unlocked_payload_mut<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut crate::vault::VaultPayload) -> R,
+    {
+        let mut state = self.state.lock().await;
+
+        match &mut *state {
+            VaultState::Unlocked { plaintext_json, .. } => {
+                let mut payload: crate::vault::VaultPayload =
+                    serde_json::from_slice(&plaintext_json[..]).ok()?;
+
+                let result = f(&mut payload);
+
+                let new_json = serde_json::to_vec(&payload).ok()?;
+                plaintext_json.clear();
+                plaintext_json.extend_from_slice(&new_json);
+
+                Some(result)
+            }
+            _ => None,
+        }
+    }
+
+    /// Execute a read-only operation on the decrypted payload
+    pub(crate) async fn with_unlocked_payload<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&crate::vault::VaultPayload) -> R,
+    {
+        let state = self.state.lock().await;
+
+        match &*state {
+            VaultState::Unlocked { plaintext_json, .. } => {
+                let payload: crate::vault::VaultPayload =
+                    serde_json::from_slice(&plaintext_json[..]).ok()?;
+                Some(f(&payload))
+            }
+            _ => None,
+        }
     }
 }

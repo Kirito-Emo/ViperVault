@@ -1,0 +1,361 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2025 Emanuele Relmi
+
+//! Vault entry data model
+//!
+//! # Security design
+//! - All user-visible fields (including title and notes) are encrypted at rest
+//! - Sensitive fields are wrapped in `secrecy`/`zeroize` types in memory
+//! - Manual serde via internal DTOs to avoid accidentally deriving serde on secret wrappers
+
+use crate::entries::error::EntryError;
+use crate::entries::validate::{
+    validate_note, validate_password, validate_title, validate_username,
+};
+use secrecy::{ExposeSecret, SecretBox, SecretString};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+/// Supported entry types
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EntryType {
+    Password,   // Username + password entry
+    SecureNote, // Secure free-form note
+    Card,       // Payment card or similar
+}
+
+/// Non-sensitive metadata required for indexing
+///
+/// # Security
+/// This struct MUST NOT contain user-identifying or user-visible data
+/// All such data is stored encrypted in [`EntrySecret`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryMetadata {
+    pub id: Uuid,              // Stable unique identifier
+    pub entry_type: EntryType, // Entry category/type
+}
+
+/// A minimal UI-facing entry summary (still sensitive)
+///
+/// # Security
+/// - This is created only after unlocking the vault
+/// - `title` is kept as `SecretString` to avoid accidental exposure and to enable zeroization
+#[derive(Debug, Clone)]
+pub struct EntrySummary {
+    pub id: Uuid,              // Entry identifier
+    pub entry_type: EntryType, // Entry category/type
+    pub title: SecretString,   // User-visible title (sensitive)
+}
+
+impl EntrySummary {
+    /// Expose the title for UI display
+    ///
+    /// # Security
+    /// Use only within trusted UI boundaries and avoid logging
+    pub fn expose_title(&self) -> &str {
+        self.title.expose_secret()
+    }
+}
+
+/// Full decrypted view of an entry for UI consumption
+///
+/// # Security
+/// - This struct is created only after vault unlock
+/// - All sensitive fields are wrapped in secrecy/zeroize types
+/// - Dropping this value wipes secrets from memory
+///
+/// # Note on `extra`
+/// `SecretBox<T>` is intentionally not `Clone` to prevent accidental secret copying
+/// For UI consumption it returns an owned `Zeroizing<Vec<u8>>` copy when needed
+#[derive(Debug)]
+pub struct EntryView {
+    pub id: Uuid,
+    pub entry_type: EntryType,
+    pub title: SecretString,
+    pub note: Option<SecretString>,
+    pub username: Option<SecretString>,
+    pub secret: SecretString,
+    pub extra: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl EntryView {
+    /// Expose the title for UI display
+    pub fn expose_title(&self) -> &str {
+        self.title.expose_secret()
+    }
+
+    /// Expose the primary secret (e.g. password)
+    ///
+    /// # Security
+    /// Use only at trusted boundaries (clipboard, autofill)
+    pub fn expose_secret(&self) -> &str {
+        self.secret.expose_secret()
+    }
+}
+
+/// Granular update operations for existing entries
+///
+/// # Security
+/// Updates are validated at the boundary and applied only to an unlocked vault
+#[derive(Debug)]
+pub enum EntryUpdate {
+    SetTitle(String),            // Change title (encrypted at rest)
+    SetNote(Option<String>),     // Change note (encrypted at rest)
+    SetUsername(Option<String>), // Change username
+    SetSecret(String),           // Replace primary secret (password/token)
+    SetExtra(Option<Vec<u8>>),   // Replace extra binary blob
+    /// Replace multiple fields at once (validated per field)
+    Replace {
+        title: Option<String>,
+        note: Option<Option<String>>,
+        username: Option<Option<String>>,
+        secret: Option<String>,
+        extra: Option<Option<Vec<u8>>>,
+    },
+}
+
+/// Sensitive secret data for an entry
+///
+/// # Security
+/// - All user data is encrypted at rest
+/// - All secrets are wiped on drop
+#[derive(Debug)]
+pub struct EntrySecret {
+    pub title: SecretString,            // User-visible title (encrypted at rest)
+    pub note: Option<SecretString>,     // Optional free-form note (encrypted at rest)
+    pub username: Option<SecretString>, // Optional username / identifier
+    pub secret: SecretString,           // Primary secret (password, token, etc.)
+    pub extra: Option<SecretBox<Zeroizing<Vec<u8>>>>, // Optional additional binary secret material
+}
+
+/// A complete vault entry
+#[derive(Debug)]
+pub struct VaultEntry {
+    pub meta: EntryMetadata,
+    pub secret: EntrySecret,
+}
+
+impl VaultEntry {
+    /// Create a new password entry
+    ///
+    /// # Validation
+    /// - `title` must be bounded and free of control/bidi/invisible chars
+    /// - `username` (if present) must be bounded and safe
+    /// - `password` must be non-empty and bounded
+    /// - `note` (if present) must be bounded and safe
+    pub fn new_password(
+        title: String,
+        username: Option<String>,
+        password: String,
+        note: Option<String>,
+    ) -> Result<Self, EntryError> {
+        validate_title(&title)?;
+        if let Some(ref n) = note {
+            validate_note(n)?;
+        }
+        if let Some(ref u) = username {
+            validate_username(u)?;
+        }
+        validate_password(&password)?;
+
+        Ok(Self {
+            meta: EntryMetadata {
+                id: Uuid::new_v4(),
+                entry_type: EntryType::Password,
+            },
+            secret: EntrySecret {
+                title: SecretString::new(title.into()),
+                note: note.map(|n| SecretString::new(n.into())),
+                username: username.map(|u| SecretString::new(u.into())),
+                secret: SecretString::new(password.into()),
+                extra: None,
+            },
+        })
+    }
+
+    /// Convert this entry into a UI-facing summary
+    ///
+    /// # Security
+    /// Returns `SecretString` for the title to reduce accidental exposure
+    pub fn to_summary(&self) -> EntrySummary {
+        EntrySummary {
+            id: self.meta.id,
+            entry_type: self.meta.entry_type,
+            title: self.secret.title.clone(),
+        }
+    }
+
+    /// Convert this entry into a UI-facing decrypted view
+    ///
+    /// # Security
+    /// - Clones `SecretString` fields intentionally so the UI owns its copy
+    /// - `extra` is copied into `Zeroizing<Vec<u8>>` (owned and wiped on drop)
+    pub fn to_view(&self) -> EntryView {
+        let extra_copy: Option<Zeroizing<Vec<u8>>> = self
+            .secret
+            .extra
+            .as_ref()
+            .map(|b| Zeroizing::new(b.expose_secret().as_slice().to_vec()));
+
+        EntryView {
+            id: self.meta.id,
+            entry_type: self.meta.entry_type,
+            title: self.secret.title.clone(),
+            note: self.secret.note.clone(),
+            username: self.secret.username.clone(),
+            secret: self.secret.secret.clone(),
+            extra: extra_copy,
+        }
+    }
+
+    /// Apply a granular update to this entry
+    ///
+    /// # Security
+    /// Validation is enforced before mutating secrets
+    pub fn apply_update(&mut self, update: EntryUpdate) -> Result<(), EntryError> {
+        match update {
+            EntryUpdate::SetTitle(t) => {
+                validate_title(&t)?;
+                self.secret.title = SecretString::new(t.into());
+            }
+            EntryUpdate::SetNote(n) => {
+                if let Some(ref s) = n {
+                    validate_note(s)?;
+                }
+                self.secret.note = n.map(|x| SecretString::new(x.into()));
+            }
+            EntryUpdate::SetUsername(u) => {
+                if let Some(ref s) = u {
+                    validate_username(s)?;
+                }
+                self.secret.username = u.map(|x| SecretString::new(x.into()));
+            }
+            EntryUpdate::SetSecret(s) => {
+                validate_password(&s)?;
+                self.secret.secret = SecretString::new(s.into());
+            }
+            EntryUpdate::SetExtra(e) => {
+                self.secret.extra = e.map(|v| SecretBox::new(Box::new(Zeroizing::new(v))));
+            }
+            EntryUpdate::Replace {
+                title,
+                note,
+                username,
+                secret,
+                extra,
+            } => {
+                if let Some(t) = title {
+                    validate_title(&t)?;
+                    self.secret.title = SecretString::new(t.into());
+                }
+                if let Some(n) = note {
+                    if let Some(ref s) = n {
+                        validate_note(s)?;
+                    }
+                    self.secret.note = n.map(|x| SecretString::new(x.into()));
+                }
+                if let Some(u) = username {
+                    if let Some(ref s) = u {
+                        validate_username(s)?;
+                    }
+                    self.secret.username = u.map(|x| SecretString::new(x.into()));
+                }
+                if let Some(s) = secret {
+                    validate_password(&s)?;
+                    self.secret.secret = SecretString::new(s.into());
+                }
+                if let Some(e) = extra {
+                    self.secret.extra = e.map(|v| SecretBox::new(Box::new(Zeroizing::new(v))));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Manual serde via internal DTOs
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EntrySecretDto {
+    title: String,
+    note: Option<String>,
+    username: Option<String>,
+    secret: String,
+    extra: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VaultEntryDto {
+    meta: EntryMetadata,
+    secret: EntrySecretDto,
+}
+
+impl From<&EntrySecret> for EntrySecretDto {
+    fn from(s: &EntrySecret) -> Self {
+        Self {
+            title: s.title.expose_secret().to_string(),
+            note: s.note.as_ref().map(|n| n.expose_secret().to_string()),
+            username: s.username.as_ref().map(|u| u.expose_secret().to_string()),
+            secret: s.secret.expose_secret().to_string(),
+            extra: s
+                .extra
+                .as_ref()
+                .map(|b| b.expose_secret().as_slice().to_vec()),
+        }
+    }
+}
+
+impl From<EntrySecretDto> for EntrySecret {
+    fn from(dto: EntrySecretDto) -> Self {
+        Self {
+            title: SecretString::new(dto.title.into()),
+            note: dto.note.map(|n| SecretString::new(n.into())),
+            username: dto.username.map(|u| SecretString::new(u.into())),
+            secret: SecretString::new(dto.secret.into()),
+            extra: dto
+                .extra
+                .map(|v| SecretBox::new(Box::new(Zeroizing::new(v)))),
+        }
+    }
+}
+
+impl From<&VaultEntry> for VaultEntryDto {
+    fn from(e: &VaultEntry) -> Self {
+        Self {
+            meta: e.meta.clone(),
+            secret: EntrySecretDto::from(&e.secret),
+        }
+    }
+}
+
+impl From<VaultEntryDto> for VaultEntry {
+    fn from(dto: VaultEntryDto) -> Self {
+        Self {
+            meta: dto.meta,
+            secret: EntrySecret::from(dto.secret),
+        }
+    }
+}
+
+impl Serialize for VaultEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        VaultEntryDto::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for VaultEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let dto = VaultEntryDto::deserialize(deserializer)?;
+        Ok(VaultEntry::from(dto))
+    }
+}

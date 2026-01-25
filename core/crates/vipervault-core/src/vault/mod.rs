@@ -3,6 +3,7 @@
 
 pub mod codec;
 pub mod error;
+pub mod storage;
 pub mod types;
 
 /// Magic bytes to quickly identify the file format
@@ -12,5 +13,8 @@ pub const MAGIC: [u8; 4] = *b"VLT1";
 pub const MAX_HEADER_LEN: u32 = 4096;
 
 // Public API re-exports
+pub use codec::*;
 pub use error::VaultParseError;
+pub use error::*;
+pub use storage::*;
 pub use types::*;

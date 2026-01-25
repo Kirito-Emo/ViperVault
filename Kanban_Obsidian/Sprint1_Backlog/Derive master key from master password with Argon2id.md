@@ -9,7 +9,7 @@
 
 ## 📌 Description
 - Use `argon2` crate with Argon2id variant
-- Parameters (tunable): memory ≥ 64MB; iterations ≥ 3; parallelism = 4
+- Parameters (tunable): memory ≥ 64MB; iterations ≥ 3; parallelism = 1
 - Salt must be unique per vault and stored in metadata
 
 ## ✅ Acceptance Criteria (AC)

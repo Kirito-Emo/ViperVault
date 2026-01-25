@@ -10,15 +10,6 @@ kanban-plugin: board
 
 ## Sprint 2 – Vault Management & Local Security
 
-- [ ] [[Define enum `EntryType { Password, Note, Card, ... }`]]
-- [ ] [[Implement CRUD `add_entry`, `update_entry`, `delete_entry`]]
-- [ ] [[Validate entry input (length, charset, format)]]
-- [ ] [[Transactional writes with file locking]]
-- [ ] [[Rust → Android iOS Clipboard API binding]]
-- [ ] [[Implement clipboard auto-clear (30s timeout)]]
-- [ ] [[Use `secrecy SecretString` for secret handling]]
-- [ ] [[Automatic memory wipe on `Drop`]]
-- [ ] [[Anti-debugging check (ptrace detect)]]
 - [ ] [[Integration tests  CRUD + vault integrity]]
 
 
@@ -53,7 +44,6 @@ kanban-plugin: board
 ## Done
 
 **Complete**
-
 - [x] [[Define `Vault` structure (UUID, versioning, metadata)]]
 - [x] [[Derive master key from master password with Argon2id]]
 - [x] [[Apply `XChaCha20-Poly1305` authenticated encryption]]
@@ -62,6 +52,15 @@ kanban-plugin: board
 - [x] [[Secure password cleanup (`zeroize`)]]
 - [x] [[Auto-lock vault via async timer (`tokio`)]]
 - [x] [[Unit test  create open close encrypted vault]]
+- [x] [[Define enum `EntryType { Password, Note, Card, ... }`]]
+- [x] [[Implement CRUD `add_entry`, `update_entry`, `delete_entry`]]
+- [x] [[Validate entry input (length, charset, format)]]
+- [x] [[Transactional writes with file locking]]
+- [x] [[Implement clipboard auto-clear (30s timeout)]]
+- [x] [[Use `secrecy SecretString` for secret handling]]
+- [x] [[Automatic memory wipe on `Drop`]]
+- [x] [[Anti-debugging check (ptrace detect)]]
+- [x] [[Rust → Android iOS Clipboard API binding]]
 
 
 
