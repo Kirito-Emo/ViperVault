@@ -10,7 +10,6 @@ kanban-plugin: board
 
 ## Sprint 2 – Vault Management & Local Security
 
-- [ ] [[Integration tests  CRUD + vault integrity]]
 
 
 ## Sprint 3 – Advanced Features & MFA
@@ -61,6 +60,7 @@ kanban-plugin: board
 - [x] [[Automatic memory wipe on `Drop`]]
 - [x] [[Anti-debugging check (ptrace detect)]]
 - [x] [[Rust → Android iOS Clipboard API binding]]
+- [x] [[Integration tests  CRUD + vault integrity]]
 
 
 

@@ -1,24 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-use crate::core::clamp_auto_lock_timeout_under_soft_policy;
 use crate::vault::VaultPayload;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep_until};
 use zeroize::Zeroizing;
 
 /// Represents the runtime state of the vault
 ///
 /// # Security
-/// - In unlocked state we keep plaintext JSON bytes in memory
+/// - In unlocked state keep plaintext JSON bytes in memory
 /// - Bytes are wrapped in `Zeroizing` so they are wiped on lock/timeout/drop
 #[derive(Debug)]
 pub enum VaultState {
-    Locked, // Vault is locked; no decrypted secrets in memory
-    Unlocked { plaintext_json: Zeroizing<Vec<u8>> }, // Vault is unlocked; decrypted payload JSON is held in memory
+    /// Vault is locked; no decrypted secrets in memory
+    Locked,
+
+    /// Vault is unlocked; decrypted payload JSON is held in memory
+    Unlocked { plaintext_json: Zeroizing<Vec<u8>> },
 }
 
 /// Manages vault locking and auto-lock behavior
@@ -26,11 +28,21 @@ pub enum VaultState {
 /// # Security
 /// - Auto-lock timer wipes decrypted memory
 /// - All state transitions go through this type
-/// - The timer can be reset via `notify_activity()`
-/// - Under debugging (soft policy) the auto-lock timeout is clamped to reduce exposure
+/// - Activity can reset the timer via `notify_activity()`
+///
+/// # Design note
+/// Intentionally rotate the `Notify` instance whenever the auto-lock task is restarted
+/// This prevents "stale" notifications (emitted before the new task starts waiting) from being observed by the new cycle
 pub struct VaultLockManager {
     state: Arc<Mutex<VaultState>>,
-    notify: Arc<Notify>,
+
+    /// Current notify handle for the active auto-lock cycle
+    ///
+    /// # Security
+    /// This is rotated on each `restart_auto_lock()` so pending notifications
+    /// from old cycles cannot reset the new timer
+    notify: StdMutex<Arc<Notify>>,
+
     auto_lock_task: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -39,7 +51,7 @@ impl VaultLockManager {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(VaultState::Locked)),
-            notify: Arc::new(Notify::new()),
+            notify: StdMutex::new(Arc::new(Notify::new())),
             auto_lock_task: Mutex::new(None),
         }
     }
@@ -50,7 +62,6 @@ impl VaultLockManager {
     /// # Security
     /// - Any previously unlocked state is dropped (wiped)
     /// - Timer resets on unlock
-    /// - Under debugging (soft policy), `timeout` may be clamped
     pub async fn unlock_with_plaintext_json(&self, plaintext_json: Vec<u8>, timeout: Duration) {
         {
             let mut state = self.state.lock().await;
@@ -59,10 +70,7 @@ impl VaultLockManager {
             };
         }
 
-        // Apply soft policy: shorten exposure window if a debugger is detected
-        let effective_timeout = clamp_auto_lock_timeout_under_soft_policy(timeout);
-
-        self.restart_auto_lock(effective_timeout).await;
+        self.restart_auto_lock(timeout).await;
     }
 
     /// Returns the decrypted payload if unlocked
@@ -92,8 +100,13 @@ impl VaultLockManager {
     }
 
     /// Resets the auto-lock timer (call on user activity)
+    ///
+    /// # Security
+    /// This does not expose any secret material; it only signals activity
     pub fn notify_activity(&self) {
-        self.notify.notify_one();
+        // Short critical section: read the current notify for the active cycle
+        let notify = self.notify.lock().expect("notify mutex poisoned").clone();
+        notify.notify_one();
     }
 
     /// Cancels any existing auto-lock task
@@ -104,23 +117,36 @@ impl VaultLockManager {
     }
 
     /// Starts or restarts the auto-lock background task
+    ///
+    /// # Security
+    /// Uses a deadline-based timer (`sleep_until`) and rotates the `Notify`
+    /// instance to ensure deterministic behavior and to prevent stale signals
+    /// from resetting a fresh timer
     async fn restart_auto_lock(&self, timeout: Duration) {
         self.cancel_auto_lock().await;
 
+        // Create a brand-new Notify for this auto-lock cycle and publish it
+        let cycle_notify = Arc::new(Notify::new());
+        {
+            let mut guard = self.notify.lock().expect("notify mutex poisoned");
+            *guard = Arc::clone(&cycle_notify);
+        }
+
         let state = Arc::clone(&self.state);
-        let notify = Arc::clone(&self.notify);
 
         let task: JoinHandle<()> = tokio::spawn(async move {
+            let mut deadline = Instant::now() + timeout;
+
             loop {
                 tokio::select! {
-                    _ = sleep(timeout) => {
-                        let mut state = state.lock().await;
-                        *state = VaultState::Locked;
+                    _ = sleep_until(deadline) => {
+                        let mut st = state.lock().await;
+                        *st = VaultState::Locked;
                         break;
                     }
-                    _ = notify.notified() => {
-                        // Activity detected -> restart timer loop
-                        continue;
+                    _ = cycle_notify.notified() => {
+                        // Activity observed: push the deadline forward
+                        deadline = Instant::now() + timeout;
                     }
                 }
             }
