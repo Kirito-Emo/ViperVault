@@ -44,6 +44,7 @@ impl LockedFile {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(path)
             .map_err(VaultStorageError::Io)?;
 

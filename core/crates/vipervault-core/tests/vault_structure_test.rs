@@ -45,9 +45,11 @@ fn magic_is_expected() {
 /// Header length bound must remain strict (defense-in-depth)
 #[test]
 fn header_len_bound_is_reasonable() {
-    // Current policy is 4096 bytes
-    assert!(MAX_HEADER_LEN > 0);
-    assert!(MAX_HEADER_LEN <= 4096);
+    const _: () = {
+        // Current policy is 4096 bytes
+        assert!(MAX_HEADER_LEN > 0);
+        assert!(MAX_HEADER_LEN <= 4096);
+    };
 }
 
 /// Storage mode discriminants must remain stable for file format compatibility

@@ -200,3 +200,10 @@ impl VaultLockManager {
         }
     }
 }
+
+impl Default for VaultLockManager {
+    /// Create a new locked vault manager
+    fn default() -> Self {
+        Self::new()
+    }
+}

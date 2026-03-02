@@ -89,12 +89,12 @@ impl ClipboardGuard {
             // Wrap in Zeroizing so this temporary copy is wiped quickly
             let current: Option<Zeroizing<String>> = backend.get().map(Zeroizing::new);
 
-            if let Some(cur) = current {
-                if *cur == *value {
-                    backend.clear();
-                }
-                // `cur` wiped here
+            if let Some(cur) = current
+                && *cur == *value
+            {
+                backend.clear();
             }
+            // `cur` wiped here
             // `value` wiped here
         }));
     }

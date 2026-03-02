@@ -21,7 +21,7 @@ pub enum DebugStatus {
 pub fn detect_debugging() -> DebugStatus {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        return detect_debugging_linux_proc();
+        detect_debugging_linux_proc()
     }
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -120,23 +120,34 @@ pub extern "C" fn vv_clipboard_guard_new(
 }
 
 /// Free a clipboard guard
+///
+/// # Safety
+/// - `handle` must be either null or a pointer previously returned by `vv_clipboard_guard_new`
+/// - `handle` must not be used after this call
+/// - The caller must ensure no concurrent use of the same handle occurs
 #[unsafe(no_mangle)]
-pub extern "C" fn vv_clipboard_guard_free(handle: *mut VvClipboardGuardHandle) {
+pub unsafe extern "C" fn vv_clipboard_guard_free(handle: *mut VvClipboardGuardHandle) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if !handle.is_null() {
+            // SAFETY: The caller guarantees `handle` was allocated by `Box::into_raw` and is not aliased for concurrent use
             unsafe { drop(Box::from_raw(handle)) };
         }
     }));
 }
 
 /// Cancel any pending auto-clear task
+///
+/// # Safety
+/// - `handle` must be a non-null pointer previously returned by `vv_clipboard_guard_new`
+/// - The caller must ensure no concurrent use of the same handle occurs
 #[unsafe(no_mangle)]
-pub extern "C" fn vv_clipboard_guard_cancel(handle: *mut VvClipboardGuardHandle) -> i32 {
+pub unsafe extern "C" fn vv_clipboard_guard_cancel(handle: *mut VvClipboardGuardHandle) -> i32 {
     let res = catch_unwind(AssertUnwindSafe(|| {
         if handle.is_null() {
             return VV_ERR_NULL;
         }
 
+        // SAFETY: The caller guarantees `handle` is valid and not concurrently used
         unsafe { &mut *handle }.inner.cancel();
         VV_OK
     }));
@@ -148,8 +159,14 @@ pub extern "C" fn vv_clipboard_guard_cancel(handle: *mut VvClipboardGuardHandle)
 ///
 /// # Soft policy
 /// If a debugger is detected, this operation is denied
+///
+/// # Safety
+/// - `handle` must be a non-null pointer previously returned by `vv_clipboard_guard_new`
+/// - `secret_ptr` must be either null (treated as error) or point to a valid readable buffer of
+///   `secret_len` bytes for the duration of this call
+/// - The caller must ensure no concurrent use of the same handle occurs
 #[unsafe(no_mangle)]
-pub extern "C" fn vv_clipboard_guard_copy_with_timeout(
+pub unsafe extern "C" fn vv_clipboard_guard_copy_with_timeout(
     handle: *mut VvClipboardGuardHandle,
     secret_ptr: *const u8,
     secret_len: usize,
@@ -164,6 +181,7 @@ pub extern "C" fn vv_clipboard_guard_copy_with_timeout(
             return VV_ERR_DENIED;
         }
 
+        // SAFETY: The caller guarantees `secret_ptr` is valid for `secret_len` bytes
         let bytes = unsafe { std::slice::from_raw_parts(secret_ptr, secret_len) };
         let s = match std::str::from_utf8(bytes) {
             Ok(v) => v,
@@ -173,6 +191,7 @@ pub extern "C" fn vv_clipboard_guard_copy_with_timeout(
         let secret = SecretString::new(s.to_owned().into());
         let timeout = Duration::from_millis(timeout_ms);
 
+        // SAFETY: The caller guarantees `handle` is valid and not concurrently used
         unsafe { &mut *handle }
             .inner
             .copy_with_timeout(&secret, timeout);

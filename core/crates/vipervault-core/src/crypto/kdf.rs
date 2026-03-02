@@ -66,9 +66,9 @@ pub fn generate_vault_salt() -> Result<[u8; SALT_LEN], KdfError> {
 /// # Errors
 /// Returns [`KdfError::InvalidParams`] if validation fails
 pub fn validate_argon2id_params(mem_kib: u32, time_cost: u32, lanes: u32) -> Result<(), KdfError> {
-    if mem_kib < DEFAULT_ARGON2ID_MEM_KIB
+    if !(DEFAULT_ARGON2ID_MEM_KIB..=MAX_ARGON2ID_MEM_KIB).contains(&mem_kib)
         || mem_kib > MAX_ARGON2ID_MEM_KIB
-        || time_cost < DEFAULT_ARGON2ID_TIME_COST
+        || !(DEFAULT_ARGON2ID_TIME_COST..=MAX_ARGON2ID_TIME_COST).contains(&time_cost)
         || time_cost > MAX_ARGON2ID_TIME_COST
         || lanes != DEFAULT_ARGON2ID_LANES
     {

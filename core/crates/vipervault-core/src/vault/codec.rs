@@ -80,10 +80,10 @@ pub fn decode_vault_file(
     if format_version == 0 {
         return Err(VaultParseError::UnsupportedVersion);
     }
-    if let Some(expected) = expected_format_version {
-        if format_version != expected {
-            return Err(VaultParseError::UnsupportedVersion);
-        }
+    if let Some(expected) = expected_format_version
+        && format_version != expected
+    {
+        return Err(VaultParseError::UnsupportedVersion);
     }
 
     // STORAGE_MODE
@@ -155,6 +155,7 @@ pub fn decode_vault_file(
 ///
 /// # Errors
 /// Returns [`VaultParseError`] if encoding or writing fails
+#[allow(dead_code)]
 pub(crate) fn write_vault_storage(
     mut out: impl Write,
     header: &VaultHeader,
