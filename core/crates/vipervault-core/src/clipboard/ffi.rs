@@ -6,13 +6,11 @@
 //! # Security
 //! - Minimal `extern "C"` API for mobile/desktop bridges
 //! - Clipboard is an untrusted sink
-//! - Secret lifetime is minimized and wiped via `Zeroizing`
+//! - Secret lifetime is minimized
 //! - Under anti-debug *soft policy*, clipboard operations are denied
-//!
-//! # ABI notes
-//! - Platform provides a vtable of function pointers
-//! - Strings are passed as UTF-8 `(ptr, len)`
 //! - No panics are allowed to cross the FFI boundary
+//! - Callbacks return `i32` error codes (`VV_OK == 0`)
+//! - This allows the core to detect failures and enforce policy coherently
 
 use crate::clipboard::guard::{ClipboardBackend, ClipboardGuard};
 use crate::core::allow_clipboard_under_soft_policy;
@@ -28,6 +26,14 @@ pub const VV_ERR_NULL: i32 = -1;
 pub const VV_ERR_DENIED: i32 = -2;
 pub const VV_ERR_UTF8: i32 = -3;
 pub const VV_ERR_PANIC: i32 = -4;
+pub const VV_ERR_BACKEND: i32 = -5;
+pub const VV_ERR_BOUNDS: i32 = -6;
+
+/// Maximum clipboard bytes accepted from the host (anti-DoS bound)
+pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024; // 1 MiB
+
+/// Maximum secret length accepted via FFI (anti-DoS bound)
+pub const MAX_SECRET_BYTES: usize = 64 * 1024; // 64 KiB
 
 /// Clipboard backend vtable provided by the host platform
 ///
@@ -35,14 +41,15 @@ pub const VV_ERR_PANIC: i32 = -4;
 /// - All callbacks must be thread-safe
 /// - Callbacks must not panic
 /// - Returned buffers must be freed via `free_buf`
+/// - Return `VV_OK == 0` on success, non-zero on error
 #[repr(C)]
 pub struct VvClipboardVTable {
-    pub set: Option<extern "C" fn(user_data: *mut c_void, value: *const u8, len: usize)>,
+    pub set: Option<extern "C" fn(user_data: *mut c_void, value: *const u8, len: usize) -> i32>,
     pub get: Option<
         extern "C" fn(user_data: *mut c_void, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32,
     >,
-    pub clear: Option<extern "C" fn(user_data: *mut c_void)>,
-    pub free_buf: Option<extern "C" fn(user_data: *mut c_void, ptr: *mut u8, len: usize)>,
+    pub clear: Option<extern "C" fn(user_data: *mut c_void) -> i32>,
+    pub free_buf: Option<extern "C" fn(user_data: *mut c_void, ptr: *mut u8, len: usize) -> i32>,
 }
 
 struct FfiClipboardBackend {
@@ -56,7 +63,7 @@ unsafe impl Sync for FfiClipboardBackend {}
 impl ClipboardBackend for FfiClipboardBackend {
     fn set(&self, value: &str) {
         if let Some(f) = self.vtable.set {
-            f(self.user_data, value.as_ptr(), value.len());
+            let _ = f(self.user_data, value.as_ptr(), value.len());
         }
     }
 
@@ -67,24 +74,44 @@ impl ClipboardBackend for FfiClipboardBackend {
         let mut out_ptr: *mut u8 = ptr::null_mut();
         let mut out_len: usize = 0;
 
-        if get(self.user_data, &mut out_ptr, &mut out_len) == 0 {
+        let rc = get(self.user_data, &mut out_ptr, &mut out_len);
+        if rc != VV_OK {
             return None;
         }
 
-        if out_ptr.is_null() || out_len == 0 {
+        struct HostBufGuard {
+            user_data: *mut c_void,
+            free: extern "C" fn(user_data: *mut c_void, ptr: *mut u8, len: usize) -> i32,
+            ptr: *mut u8,
+            len: usize,
+        }
+
+        impl Drop for HostBufGuard {
+            fn drop(&mut self) {
+                if !self.ptr.is_null() {
+                    let _ = (self.free)(self.user_data, self.ptr, self.len);
+                }
+            }
+        }
+
+        let _guard = HostBufGuard {
+            user_data: self.user_data,
+            free,
+            ptr: out_ptr,
+            len: out_len,
+        };
+
+        if out_ptr.is_null() || out_len == 0 || out_len > MAX_CLIPBOARD_BYTES {
             return None;
         }
 
         let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
-        let result = std::str::from_utf8(bytes).ok().map(|s| s.to_owned());
-
-        free(self.user_data, out_ptr, out_len);
-        result
+        std::str::from_utf8(bytes).ok().map(|s| s.to_owned())
     }
 
     fn clear(&self) {
         if let Some(f) = self.vtable.clear {
-            f(self.user_data);
+            let _ = f(self.user_data);
         }
     }
 }
@@ -102,6 +129,10 @@ pub extern "C" fn vv_clipboard_guard_new(
     user_data: *mut c_void,
 ) -> *mut VvClipboardGuardHandle {
     let res = catch_unwind(AssertUnwindSafe(|| {
+        if user_data.is_null() {
+            return ptr::null_mut();
+        }
+
         if vtable.set.is_none()
             || vtable.get.is_none()
             || vtable.clear.is_none()
@@ -175,6 +206,10 @@ pub unsafe extern "C" fn vv_clipboard_guard_copy_with_timeout(
     let res = catch_unwind(AssertUnwindSafe(|| {
         if handle.is_null() || secret_ptr.is_null() {
             return VV_ERR_NULL;
+        }
+
+        if secret_len == 0 || secret_len > MAX_SECRET_BYTES {
+            return VV_ERR_BOUNDS;
         }
 
         if !allow_clipboard_under_soft_policy() {

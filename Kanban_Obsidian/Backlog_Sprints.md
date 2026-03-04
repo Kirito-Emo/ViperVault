@@ -14,15 +14,6 @@ kanban-plugin: board
 
 ## Sprint 3 – Advanced Features & MFA
 
-- [ ] [[Implement alternative derivation for Duress Mode]]
-- [ ] [[Manage “decoy vault” with coercion password]]
-- [ ] [[Integrate TOTP HOTP library (`otpauth`)]]
-- [ ] [[Store TOTP secrets in encrypted vault]]
-- [ ] [[Integrate biometrics via FFI (Android iOS API)]]
-- [ ] [[Export encrypted vault as `.vlt`]]
-- [ ] [[Import vault with signature validation + decryption]]
-- [ ] [[Minimize unnecessary metadata in backup]]
-- [ ] [[Security tests (MFA, duress, backup)]]
 
 
 ## Review
@@ -34,9 +25,10 @@ kanban-plugin: board
 
 ## Testing
 
-- [ ] [[Unit tests for Argon2id and XChaCha20-Poly1305]]
-- [ ] [[Integration tests for CRUD + auto-lock]]
-- [ ] [[Stress test on file locking and race conditions]]
+- [x] [[Unit tests for Argon2id and XChaCha20-Poly1305]]
+- [x] [[Integration tests for CRUD + auto-lock]]
+- [x] [[Stress test on file locking and race conditions]]
+- [ ] [[Security tests (MFA, duress, backup)]]
 - [ ] [[Fuzzing for vault parsing serialization]]
 
 
@@ -61,6 +53,14 @@ kanban-plugin: board
 - [x] [[Anti-debugging check (ptrace detect)]]
 - [x] [[Rust → Android iOS Clipboard API binding]]
 - [x] [[Integration tests  CRUD + vault integrity]]
+- [x] [[Store TOTP secrets in encrypted vault]]
+- [x] [[Integrate TOTP HOTP library (`otpauth`)]]
+- [x] [[Implement alternative derivation for Duress Mode]]
+- [x] [[Manage “decoy vault” with coercion password]]
+- [x] [[Minimize unnecessary metadata in backup]]
+- [x] [[Export encrypted vault as `.vlt`]]
+- [x] [[Import vault with signature validation + decryption]]
+- [x] [[Integrate biometrics via FFI (Android iOS API)]]
 
 
 

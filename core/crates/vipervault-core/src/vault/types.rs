@@ -24,11 +24,8 @@ pub const XCHACHA20_NONCE_LEN: usize = 24;
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum StorageMode {
-    /// Payload is AEAD-encrypted bytes
-    Encrypted = 1,
-
-    /// Payload is plaintext JSON bytes (unsafe export)
-    PlaintextJson = 2,
+    Encrypted = 1,     // Payload is AEAD-encrypted bytes
+    PlaintextJson = 2, // Payload is plaintext JSON bytes (unsafe export)
 }
 
 /// Vault file container: minimal public header + payload
@@ -38,11 +35,8 @@ pub enum StorageMode {
 /// - Payload is encrypted by default; plaintext is an explicit unsafe option
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultFile {
-    /// Non-secret metadata required to parse and decrypt (if encrypted)
-    pub header: VaultHeader,
-
-    /// Payload storage (encrypted or plaintext JSON)
-    pub storage: VaultStorage,
+    pub header: VaultHeader, // Non-secret metadata required to parse and decrypt (if encrypted)
+    pub storage: VaultStorage, // Payload storage (encrypted or plaintext JSON)
 }
 
 /// Payload storage container
@@ -51,11 +45,8 @@ pub struct VaultFile {
 /// This separates the on-disk representation from in-memory decrypted structures
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VaultStorage {
-    /// AEAD-encrypted payload bytes
-    Encrypted { ciphertext: Vec<u8> },
-
-    /// Plaintext JSON payload bytes (unsafe export)
-    PlaintextJson { json: Vec<u8> },
+    Encrypted { ciphertext: Vec<u8> }, // AEAD-encrypted payload bytes
+    PlaintextJson { json: Vec<u8> },   // Plaintext JSON payload bytes (unsafe export)
 }
 
 /// Parsed vault container with raw header bytes
@@ -65,20 +56,11 @@ pub enum VaultStorage {
 /// - Do not re-serialize JSON for AAD, as JSON is not canonical
 #[derive(Debug, Clone)]
 pub struct ParsedVaultFile {
-    /// Container format version
-    pub format_version: u16,
-
-    /// Parsed header object
-    pub header: VaultHeader,
-
-    /// Raw header bytes exactly as stored in the file (AAD)
-    pub header_bytes: Vec<u8>,
-
-    /// Storage mode (encrypted / plaintext)
-    pub mode: StorageMode,
-
-    /// Payload bytes (ciphertext or plaintext json bytes)
-    pub payload: Vec<u8>,
+    pub format_version: u16,   // Container format version
+    pub header: VaultHeader,   // Parsed header object
+    pub header_bytes: Vec<u8>, // Raw header bytes exactly as stored in the file (AAD)
+    pub mode: StorageMode,     // Storage mode (encrypted / plaintext)
+    pub payload: Vec<u8>,      // Payload bytes (ciphertext or plaintext json bytes)
 }
 
 /// Minimal header stored in cleartext
@@ -97,11 +79,33 @@ pub struct VaultHeader {
     /// - This enables migrations while keeping the container format stable
     pub schema_version: u16,
 
-    /// Vault unique identifier (non-secret)
-    pub vault_id: Uuid,
+    pub vault_id: Uuid,       // Vault unique identifier (non-secret)
+    pub crypto: CryptoHeader, // Crypto parameters required to derive keys and decrypt (legacy single payload)
 
-    /// Crypto parameters required to derive keys and decrypt
-    pub crypto: CryptoHeader,
+    /// Optional duress configuration (dual payload)
+    ///
+    /// # Backward compatibility
+    /// - `#[serde(default)]` allows old vault headers (without this field) to deserialize
+    #[serde(default)]
+    pub duress: Option<DualVaultHeader>,
+}
+
+/// Duress/decoy header section
+///
+/// # Notes
+/// When present, the vault payload bytes are expected to be a JSON-serialized
+/// [`DualCiphertextEnvelope`] (not a raw ciphertext)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DualVaultHeader {
+    pub primary: CryptoHeader,
+    pub decoy: CryptoHeader,
+}
+
+/// Envelope stored in `ParsedVaultFile.payload` when duress mode is enabled
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DualCiphertextEnvelope {
+    pub primary_ct: Vec<u8>,
+    pub decoy_ct: Vec<u8>,
 }
 
 /// Crypto parameters stored in cleartext
@@ -111,17 +115,10 @@ pub struct VaultHeader {
 /// - Any tampering must be detected by authenticating the header via AEAD AAD
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CryptoHeader {
-    /// Key derivation function parameters
-    pub kdf: KdfParams,
-
-    /// Authenticated encryption scheme used to protect the payload
-    pub aead: AeadSuite,
-
-    /// KDF salt (non-secret)
-    pub salt: [u8; SALT_LEN],
-
-    /// AEAD nonce (non-secret)
-    pub nonce: [u8; XCHACHA20_NONCE_LEN],
+    pub kdf: KdfParams,                   // Key derivation function parameters
+    pub aead: AeadSuite, // Authenticated encryption scheme used to protect the payload
+    pub salt: [u8; SALT_LEN], // KDF salt (non-secret)
+    pub nonce: [u8; XCHACHA20_NONCE_LEN], // AEAD nonce (non-secret)
 }
 
 /// Supported KDF configurations
@@ -133,12 +130,9 @@ pub struct CryptoHeader {
 pub enum KdfParams {
     /// Argon2id parameters (memory / time / parallelism)
     Argon2id {
-        /// Memory cost in KiB
-        mem_kib: u32,
-        /// Time cost (iterations)
-        time_cost: u32,
-        /// Degree of parallelism
-        lanes: u32,
+        mem_kib: u32,   // Memory cost in KiB
+        time_cost: u32, // Time cost (iterations)
+        lanes: u32,     // Degree of parallelism
     },
 }
 

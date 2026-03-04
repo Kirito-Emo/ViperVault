@@ -27,3 +27,11 @@ tokio = { version = "1.49.0", features = ["rt", "macros", "sync", "time", "test-
 fs2 = "0.4.3"
 libc = "0.2.182"
 tempfile = "3.26.0"
+base32ct = "0.3.1"
+hmac = "0.12.1"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+url = "2.5.8"
+percent-encoding = "2.3.2"
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["rand_core"] }
+hkdf = "0.12.4"

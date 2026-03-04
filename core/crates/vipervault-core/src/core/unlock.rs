@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
+use super::auth_gate::AuthGate;
+use super::session::UnlockedVaultSession;
 use crate::crypto::aead::{AeadError, decrypt_xchacha20poly1305};
 use crate::crypto::kdf::{KdfError, derive_master_key_from_password};
 use crate::memory::MasterPassword;
-use crate::vault::{KdfParams, ParsedVaultFile, StorageMode, VaultParseError, VaultPayload};
+use crate::vault::duress::{UnlockOutcome, unlock_duress_envelope};
+use crate::vault::{
+    DualCiphertextEnvelope, KdfParams, ParsedVaultFile, StorageMode, VaultParseError, VaultPayload,
+};
+use tokio::task;
 use zeroize::Zeroizing;
 
 /// Errors returned by the unlock flow
@@ -28,24 +34,44 @@ pub enum UnlockError {
     /// Payload decode failed (e.g., invalid JSON structure)
     #[error("payload decode error")]
     PayloadDecode,
+
+    /// Internal execution failure (e.g. panics or join failures)
+    #[error("internal error")]
+    Internal,
+}
+
+/// Unlock the vault into a session object under [`AuthGate`]
+///
+/// # Security
+/// - Applies delay only on `AuthFailed` (wrong password OR tampering)
+/// - Does not delay on parse/kdf/payload errors to avoid DoS via malformed files
+/// - Runs the heavy KDF + decrypt path inside `spawn_blocking`
+/// - In duress mode, a successful decoy unlock does NOT reset the throttle state
+pub async fn unlock_session_gated(
+    gate: &AuthGate,
+    parsed: ParsedVaultFile,
+    password: MasterPassword,
+) -> Result<UnlockedVaultSession, UnlockError> {
+    let (outcome, payload) = gate
+        .run(
+            || async move {
+                task::spawn_blocking(move || unlock_vault_with_outcome(&parsed, &password))
+                    .await
+                    .map_err(|_| UnlockError::Internal)?
+            },
+            |e: &UnlockError| matches!(e, UnlockError::AuthFailed),
+            |(outcome, _payload): &(UnlockOutcome, VaultPayload)| {
+                matches!(outcome, UnlockOutcome::Primary)
+            },
+        )
+        .await?;
+
+    Ok(UnlockedVaultSession::new(outcome, payload))
 }
 
 /// Unlocks an encrypted vault payload from a previously parsed container using the provided password
 ///
-/// # Parameters
-/// - `parsed`: parsed vault container including raw header bytes (AAD)
-/// - `password`: master password wrapper (wiped on drop)
-///
-/// # Returns
-/// Decrypted payload as [`VaultPayload`]
-///
-/// # Security
-/// - Uses raw `header_bytes` as AEAD AAD to prevent header tampering
-/// - Maps AEAD decryption errors to `AuthFailed` to avoid oracle behavior
-/// - Derived key and plaintext are wiped automatically (Zeroizing)
-///
-/// # Errors
-/// Returns [`UnlockError`]
+/// If duress mode is enabled, this returns whichever payload the password unlocks
 pub fn unlock_vault(
     parsed: &ParsedVaultFile,
     password: &MasterPassword,
@@ -56,6 +82,10 @@ pub fn unlock_vault(
 }
 
 /// Unlocks vault and returns plaintext JSON (for auto-lock manager)
+///
+/// # Security
+/// - Uses raw `header_bytes` as AEAD AAD to prevent header tampering
+/// - Maps AEAD decryption errors to `AuthFailed` to avoid oracle behavior
 pub fn unlock_vault_to_plaintext_json(
     parsed: &ParsedVaultFile,
     password: &MasterPassword,
@@ -64,6 +94,24 @@ pub fn unlock_vault_to_plaintext_json(
         return Err(UnlockError::AuthFailed);
     }
 
+    // Duress mode: payload is a JSON envelope, decrypt either primary or decoy
+    if let Some(ref duress_header) = parsed.header.duress {
+        let envelope: DualCiphertextEnvelope = serde_json::from_slice(parsed.payload.as_slice())
+            .map_err(|_| UnlockError::PayloadDecode)?;
+
+        let (_outcome, payload) = unlock_duress_envelope(
+            parsed.header_bytes.as_slice(),
+            duress_header,
+            &envelope,
+            password,
+        )
+        .map_err(|_| UnlockError::AuthFailed)?;
+
+        let json = serde_json::to_vec(&payload).map_err(|_| UnlockError::PayloadDecode)?;
+        return Ok(Zeroizing::new(json));
+    }
+
+    // Legacy mode: payload is a raw ciphertext
     let (mem_kib, time_cost, lanes) = match &parsed.header.crypto.kdf {
         KdfParams::Argon2id {
             mem_kib,
@@ -87,6 +135,35 @@ pub fn unlock_vault_to_plaintext_json(
         &parsed.header_bytes,
     )
     .map_err(map_aead_error)
+}
+
+/// Unlock vault and report whether primary or decoy was unlocked
+pub fn unlock_vault_with_outcome(
+    parsed: &ParsedVaultFile,
+    password: &MasterPassword,
+) -> Result<(UnlockOutcome, VaultPayload), UnlockError> {
+    if parsed.mode != StorageMode::Encrypted {
+        return Err(UnlockError::AuthFailed);
+    }
+
+    if let Some(ref duress_header) = parsed.header.duress {
+        let envelope: DualCiphertextEnvelope = serde_json::from_slice(parsed.payload.as_slice())
+            .map_err(|_| UnlockError::PayloadDecode)?;
+
+        let (outcome, payload) = unlock_duress_envelope(
+            parsed.header_bytes.as_slice(),
+            duress_header,
+            &envelope,
+            password,
+        )
+        .map_err(|_| UnlockError::AuthFailed)?;
+
+        return Ok((outcome, payload));
+    }
+
+    // Legacy => Primary
+    let payload = unlock_vault(parsed, password)?;
+    Ok((UnlockOutcome::Primary, payload))
 }
 
 /// Map AEAD errors to auth failure without leaking details (no oracle)

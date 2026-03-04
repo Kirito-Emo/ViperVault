@@ -102,11 +102,13 @@ impl VaultLockManager {
     /// Resets the auto-lock timer (call on user activity)
     ///
     /// # Security
-    /// This does not expose any secret material; it only signals activity
+    /// Poisoned mutex is handled gracefully to preserve availability
     pub fn notify_activity(&self) {
-        // Short critical section: read the current notify for the active cycle
-        let notify = self.notify.lock().expect("notify mutex poisoned").clone();
-        notify.notify_one();
+        let notify_arc = match self.notify.lock() {
+            Ok(g) => g.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        notify_arc.notify_one();
     }
 
     /// Cancels any existing auto-lock task
@@ -128,7 +130,10 @@ impl VaultLockManager {
         // Create a brand-new Notify for this auto-lock cycle and publish it
         let cycle_notify = Arc::new(Notify::new());
         {
-            let mut guard = self.notify.lock().expect("notify mutex poisoned");
+            let mut guard = self
+                .notify
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *guard = Arc::clone(&cycle_notify);
         }
 

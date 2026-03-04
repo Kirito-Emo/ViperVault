@@ -9,6 +9,11 @@ use std::io;
 use thiserror::Error;
 
 /// Errors while parsing or encoding vault structures
+///
+/// # Security notes
+/// - Variants are intentionally coarse-grained
+/// - `AuthFailed` should be used for any decryption/authentication failure without
+///   distinguishing wrong password vs tampering (oracle resistance)
 #[derive(Debug, Error)]
 pub enum VaultParseError {
     /// Magic bytes do not match the expected vault format
@@ -42,6 +47,22 @@ pub enum VaultParseError {
     /// Extra unexpected bytes found after decoding the vault
     #[error("trailing bytes after vault data")]
     TrailingBytes,
+
+    /// Header is structurally invalid or contains unsupported crypto parameters
+    #[error("invalid header")]
+    InvalidHeader,
+
+    /// Payload content is invalid (e.g. cannot be parsed as expected JSON)
+    #[error("invalid payload")]
+    InvalidPayload,
+
+    /// Authentication/decryption failed
+    ///
+    /// # Security
+    /// This MUST be used for any condition that would otherwise reveal whether the
+    /// password was incorrect or the vault was tampered with
+    #[error("authentication failed")]
+    AuthFailed,
 
     /// I/O error during parsing or encoding
     #[error("io error: {0}")]

@@ -4,6 +4,7 @@
 //! Vault entry model and validation logic
 
 pub mod error;
+pub mod import;
 pub mod types;
 pub mod validate;
 

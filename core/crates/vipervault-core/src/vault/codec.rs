@@ -8,10 +8,14 @@ use crate::vault::{
 use std::io::{Read, Write};
 use zeroize::{Zeroize, Zeroizing};
 
+/// Hard cap for vault container payload to limit allocations from untrusted input (bytes)
+pub const MAX_VAULT_CONTAINER_PAYLOAD_LEN: u64 = 16 * 1024 * 1024; // 16 MiB
+
 /// Encode a vault container
 ///
 /// # Security
 /// - Plaintext export is denied under the anti-debug soft policy
+/// - Duress-enabled vaults MUST NOT be exported as plaintext (policy hardening)
 pub fn encode_vault_storage(
     header: &VaultHeader,
     storage: &VaultStorage,
@@ -19,6 +23,11 @@ pub fn encode_vault_storage(
 ) -> Result<Vec<u8>, VaultParseError> {
     if format_version == 0 {
         return Err(VaultParseError::UnsupportedVersion);
+    }
+
+    // Policy hardening for duress mode
+    if header.duress.is_some() && matches!(storage, VaultStorage::PlaintextJson { .. }) {
+        return Err(VaultParseError::PlaintextNotAllowed);
     }
 
     // Enforce soft policy on plaintext export
@@ -62,6 +71,7 @@ pub fn encode_vault_storage(
 /// # Security
 /// - Plaintext payloads are rejected under soft policy
 /// - Header bytes are preserved for AEAD AAD usage
+/// - Duress + plaintext is rejected (policy hardening)
 pub fn decode_vault_file(
     mut input: impl Read,
     expected_format_version: Option<u16>,
@@ -104,9 +114,11 @@ pub fn decode_vault_file(
     if header_len > MAX_HEADER_LEN {
         return Err(VaultParseError::HeaderTooLarge);
     }
+    let header_len_usize: usize =
+        usize::try_from(header_len).map_err(|_| VaultParseError::HeaderTooLarge)?;
 
     // HEADER_JSON (read into a zeroizing buffer)
-    let mut header_buf: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; header_len as usize]);
+    let mut header_buf: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; header_len_usize]);
     input.read_exact(&mut header_buf)?;
     let header_bytes = header_buf.to_vec();
 
@@ -118,14 +130,21 @@ pub fn decode_vault_file(
         }
     };
 
+    // Policy hardening for duress mode
+    if header.duress.is_some() && mode == StorageMode::PlaintextJson {
+        return Err(VaultParseError::PlaintextNotAllowed);
+    }
+
     // PAYLOAD_LEN
     let payload_len = read_u64_le(&mut input)?;
     if payload_len > max_payload_len {
         return Err(VaultParseError::PayloadTooLarge);
     }
+    let payload_len_usize: usize =
+        usize::try_from(payload_len).map_err(|_| VaultParseError::PayloadTooLarge)?;
 
     // PAYLOAD
-    let mut payload = vec![0u8; payload_len as usize];
+    let mut payload = vec![0u8; payload_len_usize];
     input.read_exact(&mut payload)?;
 
     // Reject trailing bytes (tampering/padding)

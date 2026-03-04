@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
 pub mod codec;
+pub mod create;
+pub mod duress;
 pub mod error;
+pub mod migrate;
 pub mod storage;
 pub mod types;
 

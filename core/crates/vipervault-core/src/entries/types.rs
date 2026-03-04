@@ -7,6 +7,7 @@
 //! - All user-visible fields (including title and notes) are encrypted at rest
 //! - Sensitive fields are wrapped in `secrecy`/`zeroize` types in memory
 //! - Manual serde via internal DTOs to avoid accidentally deriving serde on secret wrappers
+//! - Entry-type invariants are enforced (e.g., TOTP entries must carry TOTP data)
 
 use crate::entries::error::EntryError;
 use crate::entries::validate::{
@@ -24,6 +25,77 @@ pub enum EntryType {
     Password,   // Username + password entry
     SecureNote, // Secure free-form note
     Card,       // Payment card or similar
+    Totp,       // Time-based one-time password (TOTP) secret
+}
+
+/// TOTP HMAC algorithm
+///
+/// ## Security note
+/// TOTP generation must use constant-time HMAC implementations
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TotpAlgorithm {
+    Sha1,   // HMAC-SHA1 (RFC 6238 baseline; still widely supported)
+    Sha256, // HMAC-SHA256
+    Sha512, // HMAC-SHA512
+}
+
+/// TOTP parameters stored inside the encrypted vault
+#[derive(Debug, Clone)]
+pub struct TotpSecret {
+    pub issuer: Option<SecretString>, // Optional issuer (e.g., "GitHub")
+    pub account_name: Option<SecretString>, // Optional account name (e.g., email / username)
+    /// Base32-encoded secret (no spaces; uppercase recommended)
+    ///
+    /// ## Security note
+    /// Kept as `SecretString` and never logged.
+    pub secret_b32: SecretString,
+    pub digits: u8,               // Output digits (typically 6 or 8)
+    pub period_secs: u32,         // Period in seconds (typically 30)
+    pub algorithm: TotpAlgorithm, // HMAC algorithm
+}
+
+impl TotpSecret {
+    /// Validate the TOTP parameters
+    ///
+    /// ## Security note
+    /// This rejects obviously unsafe or ambiguous parameter sets
+    pub fn validate(&self) -> Result<(), EntryError> {
+        if !(self.digits == 6 || self.digits == 7 || self.digits == 8) {
+            return Err(EntryError::InvalidType);
+        }
+
+        if self.period_secs < 10 || self.period_secs > 120 {
+            return Err(EntryError::InvalidType);
+        }
+
+        // Minimal sanity check for base32:
+        // - bounded length to avoid pathological inputs
+        // - ASCII-only to avoid invisible unicode tricks
+        let s = self.secret_b32.expose_secret();
+        if s.is_empty() {
+            return Err(EntryError::EmptyField);
+        }
+
+        if s.len() > 1024 {
+            return Err(EntryError::FieldTooLarge);
+        }
+
+        if !s.is_ascii() {
+            return Err(EntryError::SuspiciousUnicode);
+        }
+
+        // Allow only RFC4648 base32 alphabet + optional '=' padding
+        // Strict decoding is performed in the MFA module with constant-time decoders
+        if !s
+            .bytes()
+            .all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7' | b'='))
+        {
+            return Err(EntryError::ForbiddenChars);
+        }
+
+        Ok(())
+    }
 }
 
 /// Non-sensitive metadata required for indexing
@@ -78,6 +150,7 @@ pub struct EntryView {
     pub username: Option<SecretString>,
     pub secret: SecretString,
     pub extra: Option<Zeroizing<Vec<u8>>>,
+    pub totp: Option<TotpSecret>,
 }
 
 impl EntryView {
@@ -104,8 +177,9 @@ pub enum EntryUpdate {
     SetTitle(String),            // Change title (encrypted at rest)
     SetNote(Option<String>),     // Change note (encrypted at rest)
     SetUsername(Option<String>), // Change username
-    SetSecret(String),           // Replace primary secret (password/token)
+    SetSecret(String),           // Replace primary secret (password/token/base32 secret)
     SetExtra(Option<Vec<u8>>),   // Replace extra binary blob
+    SetTotp(Option<TotpSecret>), // Replace TOTP parameters (only meaningful for `EntryType::Totp`)
     /// Replace multiple fields at once (validated per field)
     Replace {
         title: Option<String>,
@@ -113,6 +187,7 @@ pub enum EntryUpdate {
         username: Option<Option<String>>,
         secret: Option<String>,
         extra: Option<Option<Vec<u8>>>,
+        totp: Option<Option<TotpSecret>>,
     },
 }
 
@@ -126,8 +201,9 @@ pub struct EntrySecret {
     pub title: SecretString,            // User-visible title (encrypted at rest)
     pub note: Option<SecretString>,     // Optional free-form note (encrypted at rest)
     pub username: Option<SecretString>, // Optional username / identifier
-    pub secret: SecretString,           // Primary secret (password, token, etc.)
+    pub secret: SecretString,           // Primary secret (password, token, base32 secret, etc.)
     pub extra: Option<SecretBox<Zeroizing<Vec<u8>>>>, // Optional additional binary secret material
+    pub totp: Option<TotpSecret>,       // Optional TOTP parameters
 }
 
 /// A complete vault entry
@@ -160,7 +236,7 @@ impl VaultEntry {
         }
         validate_password(&password)?;
 
-        Ok(Self {
+        let entry = Self {
             meta: EntryMetadata {
                 id: Uuid::new_v4(),
                 entry_type: EntryType::Password,
@@ -171,14 +247,76 @@ impl VaultEntry {
                 username: username.map(|u| SecretString::new(u.into())),
                 secret: SecretString::new(password.into()),
                 extra: None,
+                totp: None,
             },
-        })
+        };
+
+        entry.validate_invariants()?;
+        Ok(entry)
+    }
+
+    /// Create a new secure note entry
+    pub fn new_secure_note(title: String, note: String) -> Result<Self, EntryError> {
+        validate_title(&title)?;
+        validate_note(&note)?;
+
+        let entry = Self {
+            meta: EntryMetadata {
+                id: Uuid::new_v4(),
+                entry_type: EntryType::SecureNote,
+            },
+            secret: EntrySecret {
+                title: SecretString::new(title.into()),
+                note: Some(SecretString::new(note.into())),
+                username: None,
+                secret: SecretString::new("".to_string().into()),
+                extra: None,
+                totp: None,
+            },
+        };
+
+        entry.validate_invariants()?;
+        Ok(entry)
+    }
+
+    /// Create a new TOTP entry
+    ///
+    /// ## Design note
+    /// The base32 secret is stored both in `secret.secret` and inside `totp.secret_b32`
+    /// to remain compatible with existing UI flows that expect a `secret` string
+    pub fn new_totp(
+        title: String,
+        totp: TotpSecret,
+        note: Option<String>,
+    ) -> Result<Self, EntryError> {
+        validate_title(&title)?;
+        if let Some(ref n) = note {
+            validate_note(n)?;
+        }
+        totp.validate()?;
+
+        let secret_b32 = totp.secret_b32.expose_secret().to_string();
+
+        let entry = Self {
+            meta: EntryMetadata {
+                id: Uuid::new_v4(),
+                entry_type: EntryType::Totp,
+            },
+            secret: EntrySecret {
+                title: SecretString::new(title.into()),
+                note: note.map(|n| SecretString::new(n.into())),
+                username: None,
+                secret: SecretString::new(secret_b32.into()),
+                extra: None,
+                totp: Some(totp),
+            },
+        };
+
+        entry.validate_invariants()?;
+        Ok(entry)
     }
 
     /// Convert this entry into a UI-facing summary
-    ///
-    /// # Security
-    /// Returns `SecretString` for the title to reduce accidental exposure
     pub fn to_summary(&self) -> EntrySummary {
         EntrySummary {
             id: self.meta.id,
@@ -207,6 +345,7 @@ impl VaultEntry {
             username: self.secret.username.clone(),
             secret: self.secret.secret.clone(),
             extra: extra_copy,
+            totp: self.secret.totp.clone(),
         }
     }
 
@@ -220,54 +359,108 @@ impl VaultEntry {
                 validate_title(&t)?;
                 self.secret.title = SecretString::new(t.into());
             }
+
             EntryUpdate::SetNote(n) => {
                 if let Some(ref s) = n {
                     validate_note(s)?;
                 }
                 self.secret.note = n.map(|x| SecretString::new(x.into()));
             }
+
             EntryUpdate::SetUsername(u) => {
                 if let Some(ref s) = u {
                     validate_username(s)?;
                 }
                 self.secret.username = u.map(|x| SecretString::new(x.into()));
             }
+
             EntryUpdate::SetSecret(s) => {
-                validate_password(&s)?;
+                if self.meta.entry_type == EntryType::Password {
+                    validate_password(&s)?;
+                } else if self.meta.entry_type == EntryType::Totp {
+                    // Keep both fields in sync for compatibility
+                    let Some(ref mut t) = self.secret.totp else {
+                        return Err(EntryError::InvalidType);
+                    };
+                    t.secret_b32 = SecretString::new(s.clone().into());
+                    t.validate()?;
+                }
                 self.secret.secret = SecretString::new(s.into());
             }
+
             EntryUpdate::SetExtra(e) => {
                 self.secret.extra = e.map(|v| SecretBox::new(Box::new(Zeroizing::new(v))));
             }
+
+            EntryUpdate::SetTotp(t) => {
+                if self.meta.entry_type != EntryType::Totp {
+                    return Err(EntryError::InvalidType);
+                }
+                if let Some(ref tsec) = t {
+                    tsec.validate()?;
+                    self.secret.secret =
+                        SecretString::new(tsec.secret_b32.expose_secret().to_string().into());
+                }
+                self.secret.totp = t;
+            }
+
             EntryUpdate::Replace {
                 title,
                 note,
                 username,
                 secret,
                 extra,
+                totp,
             } => {
                 if let Some(t) = title {
                     validate_title(&t)?;
                     self.secret.title = SecretString::new(t.into());
                 }
+
                 if let Some(n) = note {
                     if let Some(ref s) = n {
                         validate_note(s)?;
                     }
                     self.secret.note = n.map(|x| SecretString::new(x.into()));
                 }
+
                 if let Some(u) = username {
                     if let Some(ref s) = u {
                         validate_username(s)?;
                     }
                     self.secret.username = u.map(|x| SecretString::new(x.into()));
                 }
+
                 if let Some(s) = secret {
-                    validate_password(&s)?;
-                    self.secret.secret = SecretString::new(s.into());
+                    self.apply_update(EntryUpdate::SetSecret(s))?;
                 }
+
                 if let Some(e) = extra {
                     self.secret.extra = e.map(|v| SecretBox::new(Box::new(Zeroizing::new(v))));
+                }
+
+                if let Some(t) = totp {
+                    self.apply_update(EntryUpdate::SetTotp(t))?;
+                }
+            }
+        }
+
+        self.validate_invariants()?;
+        Ok(())
+    }
+
+    /// Validate type-specific invariants
+    fn validate_invariants(&self) -> Result<(), EntryError> {
+        match self.meta.entry_type {
+            EntryType::Totp => {
+                let Some(ref t) = self.secret.totp else {
+                    return Err(EntryError::InvalidType);
+                };
+                t.validate()?;
+            }
+            _ => {
+                if self.secret.totp.is_some() {
+                    return Err(EntryError::InvalidType);
                 }
             }
         }
@@ -280,12 +473,52 @@ impl VaultEntry {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize)]
+struct TotpSecretDto {
+    issuer: Option<String>,
+    account_name: Option<String>,
+    secret_b32: String,
+    digits: u8,
+    period_secs: u32,
+    algorithm: TotpAlgorithm,
+}
+
+impl From<&TotpSecret> for TotpSecretDto {
+    fn from(t: &TotpSecret) -> Self {
+        Self {
+            issuer: t.issuer.as_ref().map(|s| s.expose_secret().to_string()),
+            account_name: t
+                .account_name
+                .as_ref()
+                .map(|s| s.expose_secret().to_string()),
+            secret_b32: t.secret_b32.expose_secret().to_string(),
+            digits: t.digits,
+            period_secs: t.period_secs,
+            algorithm: t.algorithm,
+        }
+    }
+}
+
+impl From<TotpSecretDto> for TotpSecret {
+    fn from(dto: TotpSecretDto) -> Self {
+        Self {
+            issuer: dto.issuer.map(|s| SecretString::new(s.into())),
+            account_name: dto.account_name.map(|s| SecretString::new(s.into())),
+            secret_b32: SecretString::new(dto.secret_b32.into()),
+            digits: dto.digits,
+            period_secs: dto.period_secs,
+            algorithm: dto.algorithm,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct EntrySecretDto {
     title: String,
     note: Option<String>,
     username: Option<String>,
     secret: String,
     extra: Option<Vec<u8>>,
+    totp: Option<TotpSecretDto>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -305,6 +538,7 @@ impl From<&EntrySecret> for EntrySecretDto {
                 .extra
                 .as_ref()
                 .map(|b| b.expose_secret().as_slice().to_vec()),
+            totp: s.totp.as_ref().map(TotpSecretDto::from),
         }
     }
 }
@@ -319,6 +553,7 @@ impl From<EntrySecretDto> for EntrySecret {
             extra: dto
                 .extra
                 .map(|v| SecretBox::new(Box::new(Zeroizing::new(v)))),
+            totp: dto.totp.map(TotpSecret::from),
         }
     }
 }
@@ -328,15 +563,6 @@ impl From<&VaultEntry> for VaultEntryDto {
         Self {
             meta: e.meta.clone(),
             secret: EntrySecretDto::from(&e.secret),
-        }
-    }
-}
-
-impl From<VaultEntryDto> for VaultEntry {
-    fn from(dto: VaultEntryDto) -> Self {
-        Self {
-            meta: dto.meta,
-            secret: EntrySecret::from(dto.secret),
         }
     }
 }
@@ -356,6 +582,16 @@ impl<'de> Deserialize<'de> for VaultEntry {
         D: serde::Deserializer<'de>,
     {
         let dto = VaultEntryDto::deserialize(deserializer)?;
-        Ok(VaultEntry::from(dto))
+
+        let entry = VaultEntry {
+            meta: dto.meta,
+            secret: EntrySecret::from(dto.secret),
+        };
+
+        entry
+            .validate_invariants()
+            .map_err(|_| serde::de::Error::custom("invalid entry invariants"))?;
+
+        Ok(entry)
     }
 }
