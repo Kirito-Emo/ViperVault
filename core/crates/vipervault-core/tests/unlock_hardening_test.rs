@@ -74,6 +74,24 @@ fn build_encrypted_container_bytes(
     out
 }
 
+/// Construct an encrypted container without performing real encryption
+///
+/// # Purpose
+/// This helper is used for tests that need decoding to succeed while unlock must fail before decryption
+fn build_container_with_raw_payload(header: &VaultHeader, payload: &[u8]) -> Vec<u8> {
+    let header_bytes = serde_json::to_vec(header).expect("header serialize");
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&MAGIC);
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.push(StorageMode::Encrypted as u8);
+    out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&header_bytes);
+    out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
 fn sample_payload() -> VaultPayload {
     let entry = VaultEntry::new_secure_note("note".to_string(), "secret".to_string())
         .expect("entry create");
@@ -176,8 +194,6 @@ fn no_oracle_aad_tamper_is_auth_failed() {
 #[test]
 fn invalid_kdf_params_are_rejected() {
     let password = MasterPassword::new("pw".to_string());
-    let payload = sample_payload();
-    let payload_json = serde_json::to_vec(&payload).expect("payload json");
 
     let header = VaultHeader {
         schema_version: 1,
@@ -195,7 +211,9 @@ fn invalid_kdf_params_are_rejected() {
         duress: None,
     };
 
-    let bytes = build_encrypted_container_bytes(&header, &payload_json, &password);
+    // Raw payload is enough because unlock must fail during KDF validation,
+    // before attempting authenticated decryption
+    let bytes = build_container_with_raw_payload(&header, b"not-important");
     let parsed = decode_vault_file(
         Cursor::new(bytes),
         Some(1),
@@ -246,19 +264,18 @@ fn duress_no_oracle_wrong_password_vs_tamper() {
     let err_wrong = unlock_vault(&parsed_ok, &wrong_pw).unwrap_err();
     assert!(matches!(err_wrong, UnlockError::AuthFailed));
 
-    let mut bytes_t =
-        vipervault_core::vault::codec::encode_vault_storage(&vf.header, &vf.storage, 1)
-            .expect("encode");
-    let last = bytes_t.len() - 1;
-    bytes_t[last] ^= 0x01;
-
-    let parsed_t = decode_vault_file(
+    let bytes_t = vipervault_core::vault::codec::encode_vault_storage(&vf.header, &vf.storage, 1)
+        .expect("encode");
+    let mut parsed_t = decode_vault_file(
         Cursor::new(bytes_t),
         Some(1),
         MAX_VAULT_CONTAINER_PAYLOAD_LEN,
         false,
     )
     .expect("decode");
+
+    // Tamper with authenticated header bytes while keeping the duress envelope JSON valid
+    parsed_t.header_bytes[0] ^= 0x01;
 
     let err_tamper = unlock_vault(&parsed_t, &primary_pw).unwrap_err();
     assert!(matches!(err_tamper, UnlockError::AuthFailed));

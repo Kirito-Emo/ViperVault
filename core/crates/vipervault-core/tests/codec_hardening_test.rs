@@ -15,7 +15,11 @@
 //! - Trailing bytes must not be silently ignored
 
 use std::io::Cursor;
-use vipervault_core::vault::{MAX_HEADER_LEN, StorageMode, VaultParseError, decode_vault_file};
+use uuid::Uuid;
+use vipervault_core::vault::{
+    AeadSuite, CryptoHeader, KdfParams, MAX_HEADER_LEN, StorageMode, VaultHeader, VaultParseError,
+    decode_vault_file,
+};
 
 /// Helper: return `true` if the error represents a valid rejection
 ///
@@ -39,11 +43,33 @@ fn is_valid_rejection(err: &VaultParseError) -> bool {
     )
 }
 
-/// Build a minimal valid-looking vault prefix with the given header length and payload length
+/// Build a minimal valid vault header JSON
 ///
-/// This is intentionally not a fully valid vault; it is used to construct
-/// truncated and malformed inputs deterministically
-fn minimal_prefix(header_len: u32, payload_len: u64) -> Vec<u8> {
+/// # Purpose
+/// Some hardening tests must reach payload-length parsing, which requires
+/// header deserialization to succeed first
+fn valid_header_json() -> Vec<u8> {
+    let header = VaultHeader {
+        schema_version: 1,
+        vault_id: Uuid::new_v4(),
+        crypto: CryptoHeader {
+            kdf: KdfParams::Argon2id {
+                mem_kib: 64 * 1024,
+                time_cost: 3,
+                lanes: 1,
+            },
+            aead: AeadSuite::XChaCha20Poly1305,
+            salt: [0u8; 32],
+            nonce: [0u8; 24],
+        },
+        duress: None,
+    };
+
+    serde_json::to_vec(&header).expect("serialize valid header")
+}
+
+/// Build a minimal valid-looking vault prefix with the given header bytes and payload length
+fn minimal_prefix_with_header(header_bytes: &[u8], payload_len: u64) -> Vec<u8> {
     let mut buf = Vec::new();
 
     // MAGIC
@@ -56,12 +82,10 @@ fn minimal_prefix(header_len: u32, payload_len: u64) -> Vec<u8> {
     buf.push(StorageMode::Encrypted as u8);
 
     // HEADER_LEN
-    buf.extend_from_slice(&header_len.to_le_bytes());
+    buf.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
 
     // HEADER bytes
-    if header_len > 0 {
-        buf.resize(buf.len() + header_len as usize, b' ');
-    }
+    buf.extend_from_slice(header_bytes);
 
     // PAYLOAD_LEN
     buf.extend_from_slice(&payload_len.to_le_bytes());
@@ -82,7 +106,8 @@ fn invalid_magic_is_rejected() {
 /// Unknown storage mode must be rejected
 #[test]
 fn unknown_storage_mode_is_rejected() {
-    let mut data = minimal_prefix(0, 0);
+    let header = valid_header_json();
+    let mut data = minimal_prefix_with_header(&header, 0);
 
     // Corrupt storage mode byte
     data[6] = 0xFF;
@@ -191,7 +216,8 @@ fn invalid_header_json_is_rejected() {
 /// Truncated payload length field must be rejected
 #[test]
 fn truncated_payload_len_is_rejected() {
-    let mut data = minimal_prefix(0, 0);
+    let header = valid_header_json();
+    let mut data = minimal_prefix_with_header(&header, 0);
 
     // Remove last byte of payload_len
     data.pop();
@@ -205,9 +231,8 @@ fn truncated_payload_len_is_rejected() {
 /// Truncated payload bytes must be rejected
 #[test]
 fn truncated_payload_bytes_is_rejected() {
-    let mut data = minimal_prefix(2, 10);
-    let header_start = 11;
-    data[header_start..header_start + 2].copy_from_slice(b"{}");
+    let header = valid_header_json();
+    let mut data = minimal_prefix_with_header(&header, 10);
 
     // Provide fewer payload bytes than declared
     data.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
@@ -221,9 +246,8 @@ fn truncated_payload_bytes_is_rejected() {
 /// Payload length above the configured limit must be rejected before allocation
 #[test]
 fn oversized_payload_is_rejected() {
-    let mut data = minimal_prefix(2, 4097);
-    let header_start = 11;
-    data[header_start..header_start + 2].copy_from_slice(b"{}");
+    let header = valid_header_json();
+    let data = minimal_prefix_with_header(&header, 4097);
 
     let res = decode_vault_file(Cursor::new(data), None, 4096, false);
 
@@ -237,9 +261,8 @@ fn oversized_payload_is_rejected() {
 /// in `TrailingBytes` or another valid rejection error
 #[test]
 fn trailing_bytes_are_rejected() {
-    let mut data = minimal_prefix(2, 0);
-    let header_start = 11;
-    data[header_start..header_start + 2].copy_from_slice(b"{}");
+    let header = valid_header_json();
+    let mut data = minimal_prefix_with_header(&header, 0);
 
     // Add trailing garbage
     data.push(0xDE);
