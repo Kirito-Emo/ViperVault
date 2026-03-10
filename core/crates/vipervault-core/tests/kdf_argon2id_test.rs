@@ -27,7 +27,7 @@ use vipervault_core::memory::MasterPassword;
 #[test]
 fn kdf_is_deterministic_for_same_inputs() {
     let password = MasterPassword::new("correct horse battery staple".to_string());
-    let salt = generate_vault_salt().unwrap();
+    let salt = generate_vault_salt().expect("salt");
 
     let k1 = derive_master_key_from_password(
         &password,
@@ -36,7 +36,7 @@ fn kdf_is_deterministic_for_same_inputs() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf #1");
 
     let k2 = derive_master_key_from_password(
         &password,
@@ -45,7 +45,7 @@ fn kdf_is_deterministic_for_same_inputs() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf #2");
 
     assert_eq!(k1.as_bytes().as_slice(), k2.as_bytes().as_slice());
     assert_eq!(k1.as_bytes().len(), 32);
@@ -57,7 +57,7 @@ fn kdf_is_deterministic_for_same_inputs() {
 /// Prevents key reuse across different passwords
 #[test]
 fn kdf_changes_with_password() {
-    let salt = generate_vault_salt().unwrap();
+    let salt = generate_vault_salt().expect("salt");
 
     let p1 = MasterPassword::new("password-1".to_string());
     let p2 = MasterPassword::new("password-2".to_string());
@@ -69,7 +69,7 @@ fn kdf_changes_with_password() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf #1");
 
     let k2 = derive_master_key_from_password(
         &p2,
@@ -78,7 +78,7 @@ fn kdf_changes_with_password() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf #2");
 
     assert_ne!(k1.as_bytes().as_slice(), k2.as_bytes().as_slice());
 }
@@ -90,8 +90,8 @@ fn kdf_changes_with_password() {
 #[test]
 fn kdf_changes_with_salt() {
     let password = MasterPassword::new("same-password".to_string());
-    let salt1 = generate_vault_salt().unwrap();
-    let salt2 = generate_vault_salt().unwrap();
+    let salt1 = generate_vault_salt().expect("salt1");
+    let salt2 = generate_vault_salt().expect("salt2");
 
     let k1 = derive_master_key_from_password(
         &password,
@@ -100,7 +100,7 @@ fn kdf_changes_with_salt() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf #1");
 
     let k2 = derive_master_key_from_password(
         &password,
@@ -109,7 +109,7 @@ fn kdf_changes_with_salt() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf #2");
 
     assert_ne!(k1.as_bytes().as_slice(), k2.as_bytes().as_slice());
 }
@@ -121,7 +121,7 @@ fn kdf_changes_with_salt() {
 #[test]
 fn kdf_accepts_default_params() {
     let password = MasterPassword::new("pw".to_string());
-    let salt = generate_vault_salt().unwrap();
+    let salt = generate_vault_salt().expect("salt");
 
     let k = derive_master_key_from_password(
         &password,
@@ -130,7 +130,33 @@ fn kdf_accepts_default_params() {
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
     )
-    .unwrap();
+    .expect("kdf");
 
     assert_eq!(k.as_bytes().len(), 32);
+}
+
+/// Boundary: the minimum accepted policy values must still derive a valid key
+#[test]
+fn kdf_accepts_policy_minimums() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let k = derive_master_key_from_password(&password, &salt, 64 * 1024, 3, 1).expect("kdf");
+
+    assert_eq!(k.as_bytes().len(), 32);
+}
+
+/// Different valid cost parameters should normally produce different outputs
+///
+/// # Security
+/// Prevents accidental parameter-insensitive derivation behavior
+#[test]
+fn kdf_changes_with_valid_cost_parameters() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let k1 = derive_master_key_from_password(&password, &salt, 64 * 1024, 3, 1).expect("kdf #1");
+    let k2 = derive_master_key_from_password(&password, &salt, 128 * 1024, 3, 1).expect("kdf #2");
+
+    assert_ne!(k1.as_bytes().as_slice(), k2.as_bytes().as_slice());
 }

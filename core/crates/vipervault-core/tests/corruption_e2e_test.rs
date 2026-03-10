@@ -10,6 +10,7 @@
 //! Covered scenarios:
 //! - ciphertext single-byte tampering => unlock returns `AuthFailed`
 //! - header-bytes (AAD) whitespace tampering => decode succeeds but unlock returns `AuthFailed`
+//! - wrong password and tampering remain indistinguishable at the unlock layer
 //!
 //! # Security
 //! Ensures no oracle exists between "wrong password" and "tampering":
@@ -18,7 +19,7 @@
 use std::io::Cursor;
 use uuid::Uuid;
 use vipervault_core::core::{UnlockError, unlock_vault};
-use vipervault_core::crypto::aead::encrypt_xchacha20poly1305;
+use vipervault_core::crypto::aead::{encrypt_xchacha20poly1305, generate_xchacha20_nonce};
 use vipervault_core::crypto::kdf::{
     DEFAULT_ARGON2ID_LANES, DEFAULT_ARGON2ID_MEM_KIB, DEFAULT_ARGON2ID_TIME_COST,
     derive_master_key_from_password, generate_vault_salt,
@@ -26,8 +27,8 @@ use vipervault_core::crypto::kdf::{
 use vipervault_core::entries::VaultEntry;
 use vipervault_core::memory::MasterPassword;
 use vipervault_core::vault::{
-    AeadSuite, CryptoHeader, KdfParams, MAGIC, StorageMode, VaultHeader, VaultPayload,
-    decode_vault_file,
+    AeadSuite, CryptoHeader, KdfParams, MAGIC, MAX_VAULT_CONTAINER_PAYLOAD_LEN, StorageMode,
+    VaultHeader, VaultPayload, decode_vault_file,
 };
 
 /// Build an encrypted container manually, using pretty JSON header bytes
@@ -50,7 +51,7 @@ fn build_container_with_pretty_header(
             time_cost,
             lanes,
         } => (mem_kib, time_cost, lanes),
-        _ => panic!("unsupported kdf algorithm"),
+        _ => unreachable!("unsupported kdf algorithm"),
     };
 
     let key =
@@ -63,7 +64,7 @@ fn build_container_with_pretty_header(
 
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&1u16.to_le_bytes()); // format_version=1
+    out.extend_from_slice(&1u16.to_le_bytes());
     out.push(StorageMode::Encrypted as u8);
     out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(&header_bytes);
@@ -83,14 +84,21 @@ fn make_header() -> VaultHeader {
                 lanes: DEFAULT_ARGON2ID_LANES,
             },
             aead: AeadSuite::XChaCha20Poly1305,
-            salt: generate_vault_salt().unwrap(),
-            nonce: [7u8; 24],
+            salt: generate_vault_salt().expect("salt"),
+            nonce: generate_xchacha20_nonce().expect("nonce"),
         },
+        duress: None,
     }
 }
 
 fn parse(bytes: &[u8]) -> vipervault_core::vault::ParsedVaultFile {
-    decode_vault_file(Cursor::new(bytes), Some(1), 16 * 1024 * 1024, false).expect("decode")
+    decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode")
 }
 
 #[test]
@@ -104,19 +112,17 @@ fn ciphertext_single_byte_tamper_is_detected_end_to_end() {
         "super-secret".to_string(),
         Some("note".to_string()),
     )
-    .unwrap();
+    .expect("entry");
 
     let payload = VaultPayload {
         entries: vec![entry],
     };
-    let pt = serde_json::to_vec(&payload).unwrap();
+    let pt = serde_json::to_vec(&payload).expect("payload json");
 
     let mut file_bytes = build_container_with_pretty_header(&header, &pt, &password);
 
-    // Flip one byte near the end (ciphertext region)
-    if let Some(last) = file_bytes.last_mut() {
-        *last ^= 0xFF;
-    }
+    let last = file_bytes.len() - 1;
+    file_bytes[last] ^= 0xFF;
 
     let parsed = parse(&file_bytes);
     let err = unlock_vault(&parsed, &password).unwrap_err();
@@ -129,15 +135,9 @@ fn header_whitespace_tamper_is_detected_end_to_end() {
     let header = make_header();
 
     let payload = VaultPayload { entries: vec![] };
-    let pt = serde_json::to_vec(&payload).unwrap();
+    let pt = serde_json::to_vec(&payload).expect("payload json");
 
     let mut file_bytes = build_container_with_pretty_header(&header, &pt, &password);
-
-    // Locate a whitespace byte inside the header JSON and change it to another whitespace
-    // This keeps JSON valid but changes AAD bytes => must fail authentication
-    //
-    // Look for '\n' and change it to ' '
-    let mut changed = false;
 
     // Header begins after: MAGIC(4) + version(2) + mode(1) + header_len(4)
     let header_len_off = 4 + 2 + 1;
@@ -145,10 +145,12 @@ fn header_whitespace_tamper_is_detected_end_to_end() {
     let header_len = u32::from_le_bytes(
         file_bytes[header_len_off..header_len_off + 4]
             .try_into()
-            .unwrap(),
+            .expect("header len bytes"),
     ) as usize;
 
     let hdr_slice = &mut file_bytes[header_off..header_off + header_len];
+
+    let mut changed = false;
     for b in hdr_slice.iter_mut() {
         if *b == b'\n' {
             *b = b' ';
@@ -156,6 +158,7 @@ fn header_whitespace_tamper_is_detected_end_to_end() {
             break;
         }
     }
+
     assert!(
         changed,
         "expected pretty JSON to contain newline whitespace"
@@ -164,4 +167,28 @@ fn header_whitespace_tamper_is_detected_end_to_end() {
     let parsed = parse(&file_bytes);
     let err = unlock_vault(&parsed, &password).unwrap_err();
     assert!(matches!(err, UnlockError::AuthFailed));
+}
+
+#[test]
+fn wrong_password_and_tamper_remain_indistinguishable() {
+    let password = MasterPassword::new("pw".to_string());
+    let wrong = MasterPassword::new("wrong".to_string());
+    let header = make_header();
+
+    let payload = VaultPayload { entries: vec![] };
+    let pt = serde_json::to_vec(&payload).expect("payload json");
+
+    let good_bytes = build_container_with_pretty_header(&header, &pt, &password);
+    let parsed_good = parse(&good_bytes);
+
+    let err_wrong = unlock_vault(&parsed_good, &wrong).unwrap_err();
+    assert!(matches!(err_wrong, UnlockError::AuthFailed));
+
+    let mut tampered = build_container_with_pretty_header(&header, &pt, &password);
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+
+    let parsed_tampered = parse(&tampered);
+    let err_tampered = unlock_vault(&parsed_tampered, &password).unwrap_err();
+    assert!(matches!(err_tampered, UnlockError::AuthFailed));
 }

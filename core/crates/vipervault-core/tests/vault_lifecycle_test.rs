@@ -12,63 +12,25 @@
 
 use std::io::Cursor;
 use std::time::Duration;
-use uuid::Uuid;
 use vipervault_core::core::VaultLockManager;
-use vipervault_core::crypto::aead::generate_xchacha20_nonce;
-use vipervault_core::crypto::kdf::{
-    DEFAULT_ARGON2ID_LANES, DEFAULT_ARGON2ID_MEM_KIB, DEFAULT_ARGON2ID_TIME_COST,
-    derive_master_key_from_password, generate_vault_salt,
-};
 use vipervault_core::entries::VaultEntry;
 use vipervault_core::memory::MasterPassword;
+use vipervault_core::vault::create::{VaultKdfPolicy, create_encrypted_vault};
 use vipervault_core::vault::{
-    AeadSuite, CryptoHeader, KdfParams, StorageMode, VaultHeader, VaultPayload, VaultStorage,
-    decode_vault_file, encode_vault_storage,
+    MAX_VAULT_CONTAINER_PAYLOAD_LEN, StorageMode, VaultPayload, decode_vault_file,
+    encode_vault_storage,
 };
 
 /// Build a minimal encrypted vault storage from a payload
 fn build_encrypted_vault(payload: &VaultPayload, password: &MasterPassword) -> Vec<u8> {
-    // Crypto params
-    let salt = generate_vault_salt().expect("salt generation");
-    let nonce = generate_xchacha20_nonce().expect("nonce generation");
-
-    let master_key = derive_master_key_from_password(
-        password,
-        &salt,
-        DEFAULT_ARGON2ID_MEM_KIB,
-        DEFAULT_ARGON2ID_TIME_COST,
-        DEFAULT_ARGON2ID_LANES,
-    )
-    .expect("kdf");
-
-    let header = VaultHeader {
-        schema_version: 1,
-        vault_id: Uuid::new_v4(),
-        crypto: CryptoHeader {
-            kdf: KdfParams::Argon2id {
-                mem_kib: DEFAULT_ARGON2ID_MEM_KIB,
-                time_cost: DEFAULT_ARGON2ID_TIME_COST,
-                lanes: DEFAULT_ARGON2ID_LANES,
-            },
-            aead: AeadSuite::XChaCha20Poly1305,
-            salt,
-            nonce,
-        },
+    let kdf = VaultKdfPolicy {
+        mem_kib: 64 * 1024,
+        time_cost: 3,
+        lanes: 1,
     };
 
-    let plaintext = serde_json::to_vec(payload).expect("payload serialize");
-
-    let ciphertext = vipervault_core::crypto::aead::encrypt_xchacha20poly1305(
-        &master_key,
-        &nonce,
-        &plaintext,
-        &serde_json::to_vec(&header).unwrap(),
-    )
-    .expect("encrypt");
-
-    let storage = VaultStorage::Encrypted { ciphertext };
-
-    encode_vault_storage(&header, &storage, 1).expect("encode vault")
+    let vault = create_encrypted_vault(password, payload, 1, kdf).expect("create encrypted vault");
+    encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode vault")
 }
 
 #[tokio::test]
@@ -82,6 +44,8 @@ async fn full_vault_lifecycle_encrypt_decode_unlock() {
     )
     .expect("entry");
 
+    let entry_id = entry.meta.id;
+
     let payload = VaultPayload {
         entries: vec![entry],
     };
@@ -92,8 +56,13 @@ async fn full_vault_lifecycle_encrypt_decode_unlock() {
     let encoded = build_encrypted_vault(&payload, &password);
 
     // Decode
-    let parsed = decode_vault_file(Cursor::new(&encoded), Some(1), 10 * 1024 * 1024, false)
-        .expect("decode vault");
+    let parsed = decode_vault_file(
+        Cursor::new(&encoded),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode vault");
 
     assert_eq!(parsed.mode, StorageMode::Encrypted);
 
@@ -109,11 +78,9 @@ async fn full_vault_lifecycle_encrypt_decode_unlock() {
     // Verify payload integrity
     let unlocked_payload = manager.get_payload().await.expect("payload");
     assert_eq!(unlocked_payload.entries.len(), 1);
+    assert_eq!(unlocked_payload.entries[0].meta.id, entry_id);
 
-    let view = manager
-        .get_entry(unlocked_payload.entries[0].meta.id)
-        .await
-        .expect("entry view");
+    let view = manager.get_entry(entry_id).await.expect("entry view");
 
     assert_eq!(view.expose_title(), "Test entry");
     assert_eq!(view.expose_secret(), "super-secret");

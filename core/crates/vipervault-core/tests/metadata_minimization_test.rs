@@ -1,105 +1,167 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-//! Integration test: metadata minimization (no secret metadata in cleartext)
+//! Metadata minimization tests
 //!
 //! # Scope
-//! This test verifies that user-controlled entry fields (title/username/note/secret)
-//! do not appear in the cleartext bytes of the stored vault file
+//! These tests validate that encrypted vault containers do not leak entry content
+//! through plaintext metadata and that sensitive user data remains confined to
+//! the encrypted payload
+//!
+//! Covered:
+//! - encoded encrypted container must not expose entry titles
+//! - encoded encrypted container must not expose usernames
+//! - encoded encrypted container must not expose secrets
+//! - encoded encrypted container must still expose only the necessary header fields
 //!
 //! # Security
 //! Protects against offline metadata scraping from stolen vault files
 //! Only the minimal unlock metadata (format/version/crypto params/vault_id) should be visible
 
-use uuid::Uuid;
-use vipervault_core::crypto::aead::encrypt_xchacha20poly1305;
-use vipervault_core::crypto::kdf::{
-    DEFAULT_ARGON2ID_LANES, DEFAULT_ARGON2ID_MEM_KIB, DEFAULT_ARGON2ID_TIME_COST,
-    derive_master_key_from_password, generate_vault_salt,
-};
+use std::str;
 use vipervault_core::entries::VaultEntry;
 use vipervault_core::memory::MasterPassword;
-use vipervault_core::vault::{
-    AeadSuite, CryptoHeader, KdfParams, MAGIC, StorageMode, VaultHeader, VaultPayload,
-};
+use vipervault_core::vault::create::{VaultKdfPolicy, create_duress_vault, create_encrypted_vault};
+use vipervault_core::vault::{VaultPayload, encode_vault_storage};
 
-/// Build an encrypted vault file bytes where header bytes are authenticated AAD
-/// Keep header minimal and store all user data inside encrypted payload
-fn build_encrypted_file_bytes(payload: &VaultPayload, password: &MasterPassword) -> Vec<u8> {
-    let header = VaultHeader {
-        schema_version: 1,
-        vault_id: Uuid::new_v4(),
-        crypto: CryptoHeader {
-            kdf: KdfParams::Argon2id {
-                mem_kib: DEFAULT_ARGON2ID_MEM_KIB,
-                time_cost: DEFAULT_ARGON2ID_TIME_COST,
-                lanes: DEFAULT_ARGON2ID_LANES,
-            },
-            aead: AeadSuite::XChaCha20Poly1305,
-            salt: generate_vault_salt().unwrap(),
-            nonce: [3u8; 24],
-        },
-    };
+fn make_payload() -> VaultPayload {
+    let entry = VaultEntry::new_password(
+        "GitHub Personal".to_string(),
+        Some("octocat".to_string()),
+        "super-secret-password".to_string(),
+        Some("private note".to_string()),
+    )
+    .expect("entry");
 
-    // Use pretty JSON to create stable header bytes for AAD, but header still contains only unlock metadata
-    let header_bytes = serde_json::to_string_pretty(&header).unwrap().into_bytes();
-
-    let plaintext = serde_json::to_vec(payload).unwrap();
-
-    let (mem_kib, time_cost, lanes) = match header.crypto.kdf {
-        KdfParams::Argon2id {
-            mem_kib,
-            time_cost,
-            lanes,
-        } => (mem_kib, time_cost, lanes),
-        _ => panic!("unsupported kdf algorithm"),
-    };
-
-    let key =
-        derive_master_key_from_password(password, &header.crypto.salt, mem_kib, time_cost, lanes)
-            .unwrap();
-    let ct =
-        encrypt_xchacha20poly1305(&key, &header.crypto.nonce, &plaintext, &header_bytes).unwrap();
-
-    let mut out = Vec::new();
-    out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.push(StorageMode::Encrypted as u8);
-    out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(&header_bytes);
-    out.extend_from_slice(&(ct.len() as u64).to_le_bytes());
-    out.extend_from_slice(&ct);
-    out
+    VaultPayload {
+        entries: vec![entry],
+    }
 }
 
+/// Encrypted container bytes must not reveal entry content strings
 #[test]
-fn stored_file_does_not_leak_entry_metadata_or_secrets_in_cleartext() {
+fn encrypted_vault_does_not_leak_entry_content_in_plaintext() {
     let password = MasterPassword::new("pw".to_string());
+    let payload = make_payload();
 
-    // Distinctive strings which must not be found in the raw file bytes
-    let title = "VERY_UNLIKELY_TITLE_9f7a3c";
-    let username = "VERY_UNLIKELY_USER_0b12d9";
-    let note = "VERY_UNLIKELY_NOTE_52c7e1";
-    let secret = "VERY_UNLIKELY_SECRET_aa77cc";
-
-    let entry = VaultEntry::new_password(
-        title.to_string(),
-        Some(username.to_string()),
-        secret.to_string(),
-        Some(note.to_string()),
-    )
-    .unwrap();
-
-    let payload = VaultPayload {
-        entries: vec![entry],
+    let kdf = VaultKdfPolicy {
+        mem_kib: 64 * 1024,
+        time_cost: 3,
+        lanes: 1,
     };
 
-    let file_bytes = build_encrypted_file_bytes(&payload, &password);
+    let vault = create_encrypted_vault(&password, &payload, 1, kdf).expect("create vault");
+    let bytes = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode");
 
-    let haystack = String::from_utf8_lossy(&file_bytes);
+    let haystack = String::from_utf8_lossy(&bytes);
 
-    assert!(!haystack.contains(title), "title leaked in cleartext");
-    assert!(!haystack.contains(username), "username leaked in cleartext");
-    assert!(!haystack.contains(note), "note leaked in cleartext");
-    assert!(!haystack.contains(secret), "secret leaked in cleartext");
+    assert!(!haystack.contains("GitHub Personal"));
+    assert!(!haystack.contains("octocat"));
+    assert!(!haystack.contains("super-secret-password"));
+    assert!(!haystack.contains("private note"));
+}
+
+/// Duress container must not reveal either primary or decoy entry content in plaintext
+#[test]
+fn duress_vault_does_not_leak_primary_or_decoy_content_in_plaintext() {
+    let primary_pw = MasterPassword::new("primary".to_string());
+    let decoy_pw = MasterPassword::new("decoy".to_string());
+
+    let primary = VaultPayload {
+        entries: vec![
+            VaultEntry::new_password(
+                "Primary title".to_string(),
+                Some("primary-user".to_string()),
+                "primary-secret".to_string(),
+                Some("primary-note".to_string()),
+            )
+            .expect("primary entry"),
+        ],
+    };
+
+    let decoy = VaultPayload {
+        entries: vec![
+            VaultEntry::new_password(
+                "Decoy title".to_string(),
+                Some("decoy-user".to_string()),
+                "decoy-secret".to_string(),
+                Some("decoy-note".to_string()),
+            )
+            .expect("decoy entry"),
+        ],
+    };
+
+    let kdf = VaultKdfPolicy {
+        mem_kib: 64 * 1024,
+        time_cost: 3,
+        lanes: 1,
+    };
+
+    let vault = create_duress_vault(&primary_pw, &decoy_pw, &primary, &decoy, 1, kdf)
+        .expect("create duress vault");
+
+    let bytes = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode");
+    let haystack = String::from_utf8_lossy(&bytes);
+
+    for needle in [
+        "Primary title",
+        "primary-user",
+        "primary-secret",
+        "primary-note",
+        "Decoy title",
+        "decoy-user",
+        "decoy-secret",
+        "decoy-note",
+    ] {
+        assert!(
+            !haystack.contains(needle),
+            "plaintext metadata leak detected for '{needle}'"
+        );
+    }
+}
+
+/// The encoded vault header must still contain the minimal structural metadata required for decoding
+#[test]
+fn encrypted_vault_still_contains_required_structural_metadata() {
+    let password = MasterPassword::new("pw".to_string());
+    let payload = VaultPayload { entries: vec![] };
+
+    let kdf = VaultKdfPolicy {
+        mem_kib: 64 * 1024,
+        time_cost: 3,
+        lanes: 1,
+    };
+
+    let vault = create_encrypted_vault(&password, &payload, 1, kdf).expect("create vault");
+    let bytes = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode");
+
+    let haystack = String::from_utf8_lossy(&bytes);
+
+    // These are expected structural header keys, not user secrets
+    assert!(haystack.contains("schema_version"));
+    assert!(haystack.contains("vault_id"));
+    assert!(haystack.contains("crypto"));
+}
+
+/// Boundary: even an empty payload must not introduce accidental user-content leakage
+#[test]
+fn empty_payload_vault_has_no_user_content_leakage() {
+    let password = MasterPassword::new("pw".to_string());
+    let payload = VaultPayload { entries: vec![] };
+
+    let kdf = VaultKdfPolicy {
+        mem_kib: 64 * 1024,
+        time_cost: 3,
+        lanes: 1,
+    };
+
+    let vault = create_encrypted_vault(&password, &payload, 1, kdf).expect("create vault");
+    let bytes = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode");
+
+    let haystack = str::from_utf8(&bytes).unwrap_or_default();
+
+    assert!(!haystack.contains("entries"));
+    assert!(!haystack.contains("secret"));
+    assert!(!haystack.contains("title"));
+    assert!(!haystack.contains("username"));
 }

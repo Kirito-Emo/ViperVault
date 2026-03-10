@@ -1,101 +1,187 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-//! Vault corruption and oracle-resistance tests
+//! Vault corruption tests
 //!
 //! # Scope
-//! These tests ensure that corrupted vaults or wrong passwords are
-//! safely rejected without leaking information
+//! These tests validate safe rejection of corrupted vault containers:
+//! - corrupted magic / version / mode
+//! - corrupted header JSON
+//! - corrupted payload bytes
+//! - ciphertext tampering after successful decoding
+//! - truncated containers
 //!
 //! # Security
-//! - Parsing failures must not panic
-//! - Wrong passwords must not act as authentication oracles
-//! - Tampering and wrong credentials must be indistinguishable
+//! Corrupted inputs must be rejected safely without panics, partial success
+//! or oracle-like error detail leakage in the unlock path
 
 use std::io::Cursor;
-use vipervault_core::core::unlock_vault;
-use vipervault_core::crypto::aead::generate_xchacha20_nonce;
-use vipervault_core::crypto::kdf::{derive_master_key_from_password, generate_vault_salt};
+use vipervault_core::core::{UnlockError, unlock_vault};
+use vipervault_core::entries::types::VaultEntry;
 use vipervault_core::memory::MasterPassword;
+use vipervault_core::vault::create::{VaultKdfPolicy, create_encrypted_vault};
 use vipervault_core::vault::{
-    AeadSuite, CryptoHeader, KdfParams, VaultHeader, VaultParseError, VaultPayload, VaultStorage,
-    decode_vault_file, encode_vault_storage,
+    MAX_VAULT_CONTAINER_PAYLOAD_LEN, StorageMode, VaultParseError, VaultPayload, decode_vault_file,
+    encode_vault_storage,
 };
 
-/// Invalid magic must be rejected immediately at parse time
-#[test]
-fn invalid_magic_rejected() {
-    let data = b"NOPE".to_vec();
+fn build_valid_vault_bytes() -> (Vec<u8>, MasterPassword) {
+    let entry =
+        VaultEntry::new_secure_note("note".to_string(), "secret".to_string()).expect("entry");
 
-    let res = decode_vault_file(Cursor::new(data), None, 1024, false);
-
-    assert!(matches!(res, Err(VaultParseError::InvalidMagic)));
-}
-
-/// Trailing bytes or malformed payload must be rejected
-#[test]
-fn trailing_bytes_rejected() {
-    let mut data = b"VLT1\x01\x00\x01\x00\x00\x00\x00".to_vec();
-    data.extend_from_slice(&[0xDE, 0xAD]);
-
-    let res = decode_vault_file(Cursor::new(data), None, 1024, false);
-
-    assert!(res.is_err());
-}
-
-/// Wrong password must not act as an authentication oracle
-///
-/// # Security
-/// A vault encrypted with one password must fail to unlock with a different
-/// password in the same way as if the ciphertext had been tampered with
-#[test]
-fn wrong_password_does_not_oracle() {
-    // Create a minimal valid vault
-
-    let payload = VaultPayload { entries: vec![] };
-    let payload_json = serde_json::to_vec(&payload).expect("payload json");
-
-    let salt = generate_vault_salt().expect("salt");
-    let nonce = generate_xchacha20_nonce().expect("nonce");
-
-    let correct_pw = MasterPassword::new("correct-password".to_string());
-    let wrong_pw = MasterPassword::new("wrong-password".to_string());
-
-    let master_key =
-        derive_master_key_from_password(&correct_pw, &salt, 64 * 1024, 3, 1).expect("derive key");
-
-    let ciphertext = vipervault_core::crypto::aead::encrypt_xchacha20poly1305(
-        &master_key,
-        &nonce,
-        &payload_json,
-        b"aad",
-    )
-    .expect("encrypt");
-
-    let header = VaultHeader {
-        schema_version: 1,
-        vault_id: uuid::Uuid::new_v4(),
-        crypto: CryptoHeader {
-            kdf: KdfParams::Argon2id {
-                mem_kib: 64 * 1024,
-                time_cost: 3,
-                lanes: 1,
-            },
-            aead: AeadSuite::XChaCha20Poly1305,
-            salt,
-            nonce,
-        },
+    let payload = VaultPayload {
+        entries: vec![entry],
     };
 
-    let encoded = encode_vault_storage(&header, &VaultStorage::Encrypted { ciphertext }, 1)
-        .expect("encode vault");
+    let password = MasterPassword::new("pw".to_string());
 
-    // Parse succeeds
-    let parsed = decode_vault_file(Cursor::new(encoded), None, 1024 * 1024, false)
-        .expect("vault must parse");
+    let kdf = VaultKdfPolicy {
+        mem_kib: 64 * 1024,
+        time_cost: 3,
+        lanes: 1,
+    };
 
-    // Unlock with wrong password must fail generically
-    let res = unlock_vault(&parsed, &wrong_pw);
+    let vault = create_encrypted_vault(&password, &payload, 1, kdf).expect("create vault");
+    let bytes = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode vault");
+
+    (bytes, password)
+}
+
+/// Corrupting the magic must reject decoding
+#[test]
+fn corrupted_magic_is_rejected() {
+    let (mut bytes, _) = build_valid_vault_bytes();
+    bytes[0] ^= 0xFF;
+
+    let err = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, VaultParseError::InvalidMagic));
+}
+
+/// Corrupting the version must reject decoding
+#[test]
+fn corrupted_version_is_rejected() {
+    let (mut bytes, _) = build_valid_vault_bytes();
+
+    // Version is stored after 4-byte magic
+    bytes[4] = 0;
+    bytes[5] = 0;
+
+    let err = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, VaultParseError::UnsupportedVersion));
+}
+
+/// Corrupting the storage mode must reject decoding
+#[test]
+fn corrupted_storage_mode_is_rejected() {
+    let (mut bytes, _) = build_valid_vault_bytes();
+
+    // Storage mode byte follows magic(4) + version(2)
+    bytes[6] = 0xFF;
+
+    let err = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, VaultParseError::UnsupportedStorageMode));
+}
+
+/// Truncating the container must reject decoding
+#[test]
+fn truncated_container_is_rejected() {
+    let (mut bytes, _) = build_valid_vault_bytes();
+    bytes.truncate(bytes.len() / 2);
+
+    let err = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, VaultParseError::Io(_)));
+}
+
+/// Corrupting a header byte inside the serialized header must reject decoding or unlocking
+#[test]
+fn corrupted_header_bytes_are_rejected() {
+    let (mut bytes, _) = build_valid_vault_bytes();
+
+    // Layout:
+    // 0..4 magic
+    // 4..6 version
+    // 6 mode
+    // 7..11 header_len (u32 LE)
+    let header_len = u32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]) as usize;
+    let header_start = 11;
+
+    assert!(header_len > 0);
+    bytes[header_start] ^= 0x01;
+
+    let res = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    );
 
     assert!(res.is_err());
+}
+
+/// Ciphertext tampering after successful decoding must be reported as `AuthFailed`
+#[test]
+fn ciphertext_tamper_maps_to_auth_failed() {
+    let (mut bytes, password) = build_valid_vault_bytes();
+
+    // Flip the last byte, which belongs to payload/ciphertext
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+
+    let parsed = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
+
+    assert_eq!(parsed.mode, StorageMode::Encrypted);
+
+    let err = unlock_vault(&parsed, &password).unwrap_err();
+    assert!(matches!(err, UnlockError::AuthFailed));
+}
+
+/// Trailing bytes must be rejected
+#[test]
+fn trailing_bytes_are_rejected() {
+    let (mut bytes, _) = build_valid_vault_bytes();
+    bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+    let err = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, VaultParseError::TrailingBytes));
 }

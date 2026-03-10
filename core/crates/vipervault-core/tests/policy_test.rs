@@ -1,81 +1,92 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-//! Policy enforcement tests
+//! Policy tests
 //!
 //! # Scope
-//! These tests verify that security policies are enforced at decode time,
-//! not at the raw codec layer
+//! These tests validate the security policy behavior associated with
+//! primary vs decoy unlock outcomes.
+//!
+//! Covered:
+//! - policy context classification
+//! - decoy restrictions
+//! - primary allowance for normal operations
 //!
 //! # Security
-//! - Plaintext vaults must NOT be decodable unless explicitly allowed
-//! - Codec primitives are NOT responsible for policy decisions
+//! Decoy mode must reduce capabilities and deny sensitive operations
+//! such as export-like flows.
 
-use std::io::Cursor;
-use vipervault_core::vault::{
-    VaultHeader, VaultParseError, VaultStorage, decode_vault_file, encode_vault_storage,
-};
+use vipervault_core::core::policy::PolicyContext;
+use vipervault_core::vault::duress::UnlockOutcome;
 
-/// Plaintext vault decoding must be denied unless explicitly allowed
+/// Primary outcome must produce a non-decoy policy context
 #[test]
-fn plaintext_decode_denied_by_codec() {
-    let header = VaultHeader {
-        schema_version: 1,
-        vault_id: uuid::Uuid::new_v4(),
-        crypto: dummy_crypto_header(),
-    };
-
-    let storage = VaultStorage::PlaintextJson {
-        json: b"{}".to_vec(),
-    };
-
-    let encoded = encode_vault_storage(&header, &storage, 1).expect("encode plaintext vault");
-
-    let res = decode_vault_file(
-        Cursor::new(encoded),
-        None,
-        1024,
-        /* allow_plaintext = */ false,
-    );
-
-    assert!(matches!(res, Err(VaultParseError::PlaintextNotAllowed)));
+fn primary_outcome_is_not_decoy() {
+    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    assert!(!policy.is_decoy());
 }
 
-/// Plaintext vault decoding is allowed only when explicitly requested
+/// Decoy outcome must produce a decoy policy context
 #[test]
-fn plaintext_decode_allowed_when_flag_is_set() {
-    let header = VaultHeader {
-        schema_version: 1,
-        vault_id: uuid::Uuid::new_v4(),
-        crypto: dummy_crypto_header(),
-    };
-
-    let storage = VaultStorage::PlaintextJson {
-        json: b"{}".to_vec(),
-    };
-
-    let encoded = encode_vault_storage(&header, &storage, 1).expect("encode plaintext vault");
-
-    let res = decode_vault_file(
-        Cursor::new(encoded),
-        None,
-        1024,
-        /* allow_plaintext = */ true,
-    );
-
-    assert!(res.is_ok());
+fn decoy_outcome_is_decoy() {
+    let policy = PolicyContext::new(UnlockOutcome::Decoy);
+    assert!(policy.is_decoy());
 }
 
-/// Minimal dummy crypto header for plaintext-only tests
-fn dummy_crypto_header() -> vipervault_core::vault::CryptoHeader {
-    vipervault_core::vault::CryptoHeader {
-        kdf: vipervault_core::vault::KdfParams::Argon2id {
-            mem_kib: 1,
-            time_cost: 1,
-            lanes: 1,
-        },
-        aead: vipervault_core::vault::AeadSuite::XChaCha20Poly1305,
-        salt: [0u8; vipervault_core::vault::SALT_LEN],
-        nonce: [0u8; vipervault_core::vault::XCHACHA20_NONCE_LEN],
-    }
+/// Primary policy must allow secret export
+///
+/// # Security
+/// Primary mode represents the fully authenticated session
+#[test]
+fn primary_policy_allows_secret_export() {
+    let policy = PolicyContext::new(UnlockOutcome::Primary);
+
+    assert!(!policy.is_decoy());
+    assert!(policy.allow_secret_export());
+}
+
+/// Decoy policy must deny secret export
+///
+/// # Security
+/// Decoy mode must never be confused with primary mode
+#[test]
+fn decoy_policy_denies_secret_export() {
+    let policy = PolicyContext::new(UnlockOutcome::Decoy);
+
+    assert!(policy.is_decoy());
+    assert!(!policy.allow_secret_export());
+}
+
+/// Constructing equal contexts from equal outcomes must be deterministic
+#[test]
+fn policy_context_construction_is_deterministic() {
+    let p1 = PolicyContext::new(UnlockOutcome::Primary);
+    let p2 = PolicyContext::new(UnlockOutcome::Primary);
+
+    let d1 = PolicyContext::new(UnlockOutcome::Decoy);
+    let d2 = PolicyContext::new(UnlockOutcome::Decoy);
+
+    assert_eq!(p1, p2);
+    assert_eq!(d1, d2);
+
+    assert_eq!(p1.is_decoy(), p2.is_decoy());
+    assert_eq!(d1.is_decoy(), d2.is_decoy());
+    assert_eq!(p1.allow_secret_export(), p2.allow_secret_export());
+    assert_eq!(d1.allow_secret_export(), d2.allow_secret_export());
+}
+
+/// Boundary: repeated construction must not leak state across contexts
+#[test]
+fn policy_context_has_no_cross_instance_state() {
+    let primary = PolicyContext::new(UnlockOutcome::Primary);
+    let decoy = PolicyContext::new(UnlockOutcome::Decoy);
+    let primary_again = PolicyContext::new(UnlockOutcome::Primary);
+
+    assert!(!primary.is_decoy());
+    assert!(decoy.is_decoy());
+    assert!(!primary_again.is_decoy());
+
+    assert!(primary.allow_secret_export());
+    assert!(!decoy.allow_secret_export());
+    assert!(primary_again.allow_secret_export());
 }

@@ -4,152 +4,125 @@
 //! AEAD XChaCha20-Poly1305 hardening tests
 //!
 //! # Scope
-//! These tests focus on misuse resistance and failure behavior of the AEAD layer
-//! The goal is NOT to verify correctness (covered by functional tests),
-//! but to ensure that:
-//! - all authentication failures are handled safely
-//! - no partial plaintext is ever returned
-//! - no panics occur under malformed or adversarial inputs
-//! - no information oracle is exposed through error behavior
+//! These tests validate the integrity and misuse resistance properties of the AEAD layer:
+//! - ciphertext tampering is rejected
+//! - nonce/key/AAD mismatch is rejected
+//! - truncation and malformed ciphertext are rejected
 //!
-//! # Security properties validated
-//! - Confidentiality under tampering
-//! - Integrity under ciphertext / nonce / AAD modification
-//! - Robust handling of malformed inputs
+//! # Security
+//! Decryption must fail safely for all authentication failures and malformed inputs,
+//! without returning partial plaintext
 
 use vipervault_core::crypto::aead::{
     decrypt_xchacha20poly1305, encrypt_xchacha20poly1305, generate_xchacha20_nonce,
 };
 use vipervault_core::memory::KeyMaterial;
 
-/// Decryption must fail when using a wrong key
-///
-/// # Security
-/// This prevents attackers from learning information via key mismatch
+/// Flipping one ciphertext byte must cause decryption failure
 #[test]
-fn decryption_fails_with_wrong_key() {
-    let key_ok = KeyMaterial::new([1u8; 32]);
-    let key_bad = KeyMaterial::new([2u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+fn ciphertext_tamper_is_rejected() {
+    let key = KeyMaterial::new([1u8; 32]);
+    let nonce = generate_xchacha20_nonce().expect("nonce");
+    let aad = b"aad";
+    let plaintext = b"payload";
 
-    let ct = encrypt_xchacha20poly1305(&key_ok, &nonce, b"secret", b"aad").unwrap();
-    let res = decrypt_xchacha20poly1305(&key_bad, &nonce, &ct, b"aad");
+    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, plaintext, aad).expect("encrypt");
+    let last = ct.len() - 1;
+    ct[last] ^= 0x01;
 
+    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, aad);
     assert!(res.is_err());
 }
 
-/// Decryption must fail if the ciphertext is modified
-///
-/// # Security
-/// Any bit-flip in the ciphertext must invalidate authentication
+/// Using a different nonce must cause decryption failure
 #[test]
-fn tampered_ciphertext_is_rejected() {
+fn wrong_nonce_is_rejected() {
+    let key = KeyMaterial::new([2u8; 32]);
+    let nonce = generate_xchacha20_nonce().expect("nonce");
+    let wrong_nonce = generate_xchacha20_nonce().expect("wrong nonce");
+    let aad = b"aad";
+    let plaintext = b"payload";
+
+    let ct = encrypt_xchacha20poly1305(&key, &nonce, plaintext, aad).expect("encrypt");
+
+    let res = decrypt_xchacha20poly1305(&key, &wrong_nonce, &ct, aad);
+    assert!(res.is_err());
+}
+
+/// Using a different key must cause decryption failure
+#[test]
+fn wrong_key_is_rejected() {
     let key = KeyMaterial::new([3u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+    let wrong_key = KeyMaterial::new([4u8; 32]);
+    let nonce = generate_xchacha20_nonce().expect("nonce");
+    let aad = b"aad";
+    let plaintext = b"payload";
 
-    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, b"secret", b"aad").unwrap();
-    ct[0] ^= 0xFF; // flip one bit
+    let ct = encrypt_xchacha20poly1305(&key, &nonce, plaintext, aad).expect("encrypt");
 
-    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, b"aad");
+    let res = decrypt_xchacha20poly1305(&wrong_key, &nonce, &ct, aad);
     assert!(res.is_err());
 }
 
-/// Decryption must fail if the nonce is modified
-///
-/// # Security
-/// Nonce integrity is critical for AEAD schemes
+/// Using different AAD must cause decryption failure
 #[test]
-fn tampered_nonce_is_rejected() {
-    let key = KeyMaterial::new([4u8; 32]);
-    let mut nonce = generate_xchacha20_nonce().unwrap();
-
-    let ct = encrypt_xchacha20poly1305(&key, &nonce, b"secret", b"aad").unwrap();
-    nonce[0] ^= 0xAA; // corrupt nonce
-
-    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, b"aad");
-    assert!(res.is_err());
-}
-
-/// Decryption must fail if the associated data (AAD) is modified
-///
-/// # Security
-/// AAD is authenticated but not encrypted; any mismatch must be detected
-#[test]
-fn tampered_aad_is_rejected() {
+fn wrong_aad_is_rejected() {
     let key = KeyMaterial::new([5u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+    let nonce = generate_xchacha20_nonce().expect("nonce");
+    let plaintext = b"payload";
 
-    let ct = encrypt_xchacha20poly1305(&key, &nonce, b"secret", b"aad-1").unwrap();
+    let ct = encrypt_xchacha20poly1305(&key, &nonce, plaintext, b"aad-1").expect("encrypt");
+
     let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, b"aad-2");
-
     assert!(res.is_err());
 }
 
-/// Truncated ciphertext must be rejected
-///
-/// # Security
-/// Ensures that no partial plaintext is ever returned
+/// Truncating the ciphertext must cause decryption failure
 #[test]
 fn truncated_ciphertext_is_rejected() {
     let key = KeyMaterial::new([6u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+    let nonce = generate_xchacha20_nonce().expect("nonce");
+    let aad = b"aad";
+    let plaintext = b"payload";
 
-    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, b"very secret data", b"aad").unwrap();
-    ct.truncate(ct.len() / 2); // remove tail
+    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, plaintext, aad).expect("encrypt");
+    ct.pop();
 
-    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, b"aad");
+    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, aad);
     assert!(res.is_err());
 }
 
 /// Empty ciphertext must be rejected
-///
-/// # Security
-/// Prevents degenerate cases from producing undefined behavior
 #[test]
 fn empty_ciphertext_is_rejected() {
     let key = KeyMaterial::new([7u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+    let nonce = generate_xchacha20_nonce().expect("nonce");
 
-    let res = decrypt_xchacha20poly1305(&key, &nonce, &[], b"aad");
+    let res = decrypt_xchacha20poly1305(&key, &nonce, b"", b"aad");
     assert!(res.is_err());
 }
 
-/// Ciphertext with only authentication tag length removed must be rejected
-///
-/// # Security
-/// Ensures authentication tag is mandatory
+/// Single-byte ciphertext must be rejected
 #[test]
-fn missing_authentication_tag_is_rejected() {
+fn undersized_ciphertext_is_rejected() {
     let key = KeyMaterial::new([8u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+    let nonce = generate_xchacha20_nonce().expect("nonce");
 
-    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, b"secret", b"aad").unwrap();
-
-    // Remove last bytes (Poly1305 tag is 16 bytes)
-    if ct.len() > 16 {
-        ct.truncate(ct.len() - 16);
-    }
-
-    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, b"aad");
+    let res = decrypt_xchacha20poly1305(&key, &nonce, &[0xAA], b"aad");
     assert!(res.is_err());
 }
 
-/// Large corrupted ciphertext must be rejected without panic
-///
-/// # Security
-/// Ensures robustness against malformed large inputs
+/// Tampering near the beginning of the ciphertext must also be rejected
 #[test]
-fn large_corrupted_ciphertext_is_rejected() {
+fn prefix_tamper_is_rejected() {
     let key = KeyMaterial::new([9u8; 32]);
-    let nonce = generate_xchacha20_nonce().unwrap();
+    let nonce = generate_xchacha20_nonce().expect("nonce");
+    let aad = b"aad";
+    let plaintext = b"payload";
 
-    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, &vec![0xAA; 1024 * 1024], b"aad").unwrap();
+    let mut ct = encrypt_xchacha20poly1305(&key, &nonce, plaintext, aad).expect("encrypt");
+    ct[0] ^= 0x80;
 
-    // Corrupt multiple bytes
-    for i in (0..ct.len()).step_by(1024) {
-        ct[i] ^= 0xFF;
-    }
-
-    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, b"aad");
+    let res = decrypt_xchacha20poly1305(&key, &nonce, &ct, aad);
     assert!(res.is_err());
 }

@@ -16,9 +16,10 @@
 
 use std::io::Cursor;
 use uuid::Uuid;
+use vipervault_core::vault::codec::encode_vault_storage;
 use vipervault_core::vault::{
-    AeadSuite, CryptoHeader, KdfParams, MAGIC, MAX_HEADER_LEN, ParsedVaultFile, StorageMode,
-    VaultHeader, VaultParseError, VaultStorage, decode_vault_file, encode_vault_storage,
+    AeadSuite, CryptoHeader, KdfParams, MAGIC, MAX_HEADER_LEN, MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+    ParsedVaultFile, StorageMode, VaultHeader, VaultParseError, VaultStorage, decode_vault_file,
 };
 
 /// Build a minimal header suitable for codec tests
@@ -39,15 +40,16 @@ fn header_minimal() -> VaultHeader {
             salt: [0u8; 32],
             nonce: [0u8; 24],
         },
+        duress: None,
     }
 }
 
-/// Decode helper with permissive bounds for tests
+/// Decode helper with standard bounds for tests
 fn decode(bytes: &[u8], allow_plaintext: bool) -> Result<ParsedVaultFile, VaultParseError> {
     decode_vault_file(
         Cursor::new(bytes),
         Some(1),
-        16 * 1024 * 1024,
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
         allow_plaintext,
     )
 }
@@ -79,7 +81,7 @@ fn encode_decode_encrypted_roundtrip() {
 /// Header bytes must be preserved exactly as stored (AAD requirement)
 ///
 /// # Security
-/// JSON is not canonical; this test ensures the exact bytes from disk are keeped
+/// JSON is not canonical; this test ensures the exact bytes from disk are preserved
 #[test]
 fn header_bytes_are_preserved_exactly() {
     let header = header_minimal();
@@ -111,11 +113,11 @@ fn plaintext_mode_requires_allow_plaintext_true() {
     let encoded = encode_vault_storage(&header, &storage, 1);
 
     if let Ok(bytes) = encoded {
-        // Decoding with allow_plaintext=false must reject
+        // Decoding with allow_plaintext = false must reject
         let res = decode(&bytes, false);
         assert!(matches!(res, Err(VaultParseError::PlaintextNotAllowed)));
 
-        // Decoding with allow_plaintext=true may accept (subject to soft policy)
+        // Decoding with allow_plaintext = true may accept (subject to soft policy)
         let res2 = decode(&bytes, true);
         // If soft policy denies plaintext globally, decode may still reject
         assert!(res2.is_ok() || matches!(res2, Err(VaultParseError::PlaintextNotAllowed)));

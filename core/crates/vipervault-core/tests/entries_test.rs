@@ -15,7 +15,7 @@
 //! The entry layer is a primary input validation boundary. These tests ensure:
 //! - memory DoS protection via hard size limits
 //! - spoofing mitigation via Unicode control rejection
-//! - secrets are serializable only through the intended DTO pathway
+//! - secrets are serializable only through the intended data model
 
 use secrecy::ExposeSecret;
 use vipervault_core::entries::{
@@ -71,14 +71,18 @@ fn title_length_bounds_enforced() {
 /// Title: control characters must be rejected
 #[test]
 fn title_control_chars_rejected() {
-    let res = validate_title("hello\nworld");
-    assert!(matches!(res, Err(EntryError::ForbiddenChars)));
-
-    let res2 = validate_title("hello\tworld");
-    assert!(matches!(res2, Err(EntryError::ForbiddenChars)));
-
-    let res3 = validate_title("hello\u{0000}world");
-    assert!(matches!(res3, Err(EntryError::ForbiddenChars)));
+    assert!(matches!(
+        validate_title("hello\nworld"),
+        Err(EntryError::ForbiddenChars)
+    ));
+    assert!(matches!(
+        validate_title("hello\tworld"),
+        Err(EntryError::ForbiddenChars)
+    ));
+    assert!(matches!(
+        validate_title("hello\u{0000}world"),
+        Err(EntryError::ForbiddenChars)
+    ));
 }
 
 /// Title: suspicious Unicode controls must be rejected
@@ -209,7 +213,6 @@ fn password_length_bounds_enforced() {
 #[test]
 fn password_allows_symbols_and_unicode() {
     let s = "p@ßw0rd✅🙂🔥/\\\t\r\n"; // includes controls; password validator must NOT reject controls by design
-    // NOTE: current implementation only checks empty/len, so this is OK as long as length > 0
     let res = validate_password(s);
     assert!(res.is_ok());
 }
@@ -266,8 +269,7 @@ fn new_password_entry_validates_fields() {
 /// `VaultEntry` must roundtrip through JSON serde correctly
 ///
 /// # Security
-/// `VaultEntry` does not derive serde automatically; this test ensures the manual DTO-based
-/// serde implementation is correct and stable
+/// This test ensures the serde implementation is correct and stable
 #[test]
 fn vault_entry_json_roundtrip() {
     let entry = VaultEntry::new_password(
@@ -290,4 +292,17 @@ fn vault_entry_json_roundtrip() {
         decoded.to_view().secret.expose_secret(),
         entry.to_view().secret.expose_secret()
     );
+}
+
+/// Secure note creation must validate title and secret
+#[test]
+fn new_secure_note_validates_fields() {
+    let ok = VaultEntry::new_secure_note("Title".to_string(), "secret".to_string());
+    assert!(ok.is_ok());
+
+    let bad_title = VaultEntry::new_secure_note("".to_string(), "secret".to_string());
+    assert!(matches!(bad_title, Err(EntryError::EmptyField)));
+
+    let bad_secret = VaultEntry::new_secure_note("Title".to_string(), "".to_string());
+    assert!(matches!(bad_secret, Err(EntryError::EmptyField)));
 }

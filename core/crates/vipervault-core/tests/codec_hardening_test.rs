@@ -39,11 +39,11 @@ fn is_valid_rejection(err: &VaultParseError) -> bool {
     )
 }
 
-/// Build a minimal valid-looking vault prefix with the given payload length
+/// Build a minimal valid-looking vault prefix with the given header length and payload length
 ///
-/// This is intentionally *not* a fully valid vault; it is used to construct
+/// This is intentionally not a fully valid vault; it is used to construct
 /// truncated and malformed inputs deterministically
-fn minimal_prefix(payload_len: u64) -> Vec<u8> {
+fn minimal_prefix(header_len: u32, payload_len: u64) -> Vec<u8> {
     let mut buf = Vec::new();
 
     // MAGIC
@@ -55,8 +55,13 @@ fn minimal_prefix(payload_len: u64) -> Vec<u8> {
     // STORAGE_MODE: Encrypted
     buf.push(StorageMode::Encrypted as u8);
 
-    // HEADER_LEN = 0
-    buf.extend_from_slice(&0u32.to_le_bytes());
+    // HEADER_LEN
+    buf.extend_from_slice(&header_len.to_le_bytes());
+
+    // HEADER bytes
+    if header_len > 0 {
+        buf.resize(buf.len() + header_len as usize, b' ');
+    }
 
     // PAYLOAD_LEN
     buf.extend_from_slice(&payload_len.to_le_bytes());
@@ -77,7 +82,7 @@ fn invalid_magic_is_rejected() {
 /// Unknown storage mode must be rejected
 #[test]
 fn unknown_storage_mode_is_rejected() {
-    let mut data = minimal_prefix(0);
+    let mut data = minimal_prefix(0, 0);
 
     // Corrupt storage mode byte
     data[6] = 0xFF;
@@ -117,6 +122,21 @@ fn truncated_mode_is_io_error() {
     assert!(matches!(res, Err(VaultParseError::Io(_))));
 }
 
+/// Version zero must be rejected
+#[test]
+fn version_zero_is_rejected() {
+    let mut data = Vec::new();
+    data.extend_from_slice(b"VLT1");
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.push(StorageMode::Encrypted as u8);
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&0u64.to_le_bytes());
+
+    let res = decode_vault_file(Cursor::new(data), None, 1024, false);
+
+    assert!(matches!(res, Err(VaultParseError::UnsupportedVersion)));
+}
+
 /// Header length exceeding the maximum must be rejected
 #[test]
 fn oversized_header_is_rejected() {
@@ -149,10 +169,29 @@ fn truncated_header_bytes_is_rejected() {
     assert!(is_valid_rejection(res.as_ref().unwrap_err()));
 }
 
+/// Invalid header JSON must be rejected after header bytes are fully read
+#[test]
+fn invalid_header_json_is_rejected() {
+    let mut data = Vec::new();
+
+    data.extend_from_slice(b"VLT1");
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.push(StorageMode::Encrypted as u8);
+
+    let header = b"nope";
+    data.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    data.extend_from_slice(header);
+    data.extend_from_slice(&0u64.to_le_bytes());
+
+    let res = decode_vault_file(Cursor::new(data), None, 1024, false);
+
+    assert!(matches!(res, Err(VaultParseError::Deserialize)));
+}
+
 /// Truncated payload length field must be rejected
 #[test]
 fn truncated_payload_len_is_rejected() {
-    let mut data = minimal_prefix(0);
+    let mut data = minimal_prefix(0, 0);
 
     // Remove last byte of payload_len
     data.pop();
@@ -166,7 +205,9 @@ fn truncated_payload_len_is_rejected() {
 /// Truncated payload bytes must be rejected
 #[test]
 fn truncated_payload_bytes_is_rejected() {
-    let mut data = minimal_prefix(10);
+    let mut data = minimal_prefix(2, 10);
+    let header_start = 11;
+    data[header_start..header_start + 2].copy_from_slice(b"{}");
 
     // Provide fewer payload bytes than declared
     data.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
@@ -177,6 +218,18 @@ fn truncated_payload_bytes_is_rejected() {
     assert!(is_valid_rejection(res.as_ref().unwrap_err()));
 }
 
+/// Payload length above the configured limit must be rejected before allocation
+#[test]
+fn oversized_payload_is_rejected() {
+    let mut data = minimal_prefix(2, 4097);
+    let header_start = 11;
+    data[header_start..header_start + 2].copy_from_slice(b"{}");
+
+    let res = decode_vault_file(Cursor::new(data), None, 4096, false);
+
+    assert!(matches!(res, Err(VaultParseError::PayloadTooLarge)));
+}
+
 /// Trailing bytes after a well-formed payload must be rejected
 ///
 /// # Note
@@ -184,7 +237,9 @@ fn truncated_payload_bytes_is_rejected() {
 /// in `TrailingBytes` or another valid rejection error
 #[test]
 fn trailing_bytes_are_rejected() {
-    let mut data = minimal_prefix(0);
+    let mut data = minimal_prefix(2, 0);
+    let header_start = 11;
+    data[header_start..header_start + 2].copy_from_slice(b"{}");
 
     // Add trailing garbage
     data.push(0xDE);

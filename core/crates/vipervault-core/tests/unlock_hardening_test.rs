@@ -8,6 +8,7 @@
 //! - wrong password and tampering must be indistinguishable (no oracle)
 //! - invalid KDF parameters must be rejected early (DoS protection)
 //! - error surface remains coarse-grained
+//! - duress vaults must preserve the same non-oracle behavior
 //!
 //! # Security
 //! Unlock must not leak whether authentication failed due to:
@@ -25,10 +26,12 @@ use vipervault_core::crypto::kdf::{
     DEFAULT_ARGON2ID_LANES, DEFAULT_ARGON2ID_MEM_KIB, DEFAULT_ARGON2ID_TIME_COST, KdfError,
     derive_master_key_from_password, generate_vault_salt,
 };
+use vipervault_core::entries::types::VaultEntry;
 use vipervault_core::memory::MasterPassword;
+use vipervault_core::vault::create::{VaultKdfPolicy, create_duress_vault};
 use vipervault_core::vault::{
-    AeadSuite, CryptoHeader, KdfParams, MAGIC, ParsedVaultFile, StorageMode, VaultHeader,
-    VaultPayload, decode_vault_file,
+    AeadSuite, CryptoHeader, KdfParams, MAGIC, MAX_VAULT_CONTAINER_PAYLOAD_LEN, StorageMode,
+    VaultHeader, VaultPayload, decode_vault_file,
 };
 
 /// Construct an encrypted container with AAD exactly equal to stored `header_bytes`
@@ -45,7 +48,7 @@ fn build_encrypted_container_bytes(
             time_cost,
             lanes,
         } => (mem_kib, time_cost, lanes),
-        _ => panic!("unsupported kdf algorithm"),
+        _ => unreachable!("unsupported KDF params in tests"),
     };
 
     let master_key =
@@ -60,13 +63,10 @@ fn build_encrypted_container_bytes(
     )
     .expect("encrypt");
 
-    let format_version: u16 = 1;
-    let mode: u8 = StorageMode::Encrypted as u8;
-
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&format_version.to_le_bytes());
-    out.push(mode);
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.push(StorageMode::Encrypted as u8);
     out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(&header_bytes);
     out.extend_from_slice(&(ct.len() as u64).to_le_bytes());
@@ -74,18 +74,22 @@ fn build_encrypted_container_bytes(
     out
 }
 
-fn parse_container(bytes: &[u8]) -> ParsedVaultFile {
-    decode_vault_file(Cursor::new(bytes), Some(1), 16 * 1024 * 1024, false).expect("decode")
+fn sample_payload() -> VaultPayload {
+    let entry = VaultEntry::new_secure_note("note".to_string(), "secret".to_string())
+        .expect("entry create");
+
+    VaultPayload {
+        entries: vec![entry],
+    }
 }
 
-/// Ensure wrong password and ciphertext tampering map to the same public error (`AuthFailed`)
-///
-/// # Security
-/// This test enforces the "no oracle" requirement
 #[test]
-fn wrong_password_and_tampering_are_indistinguishable() {
-    let password_ok = MasterPassword::new("ok".to_string());
-    let password_bad = MasterPassword::new("bad".to_string());
+fn no_oracle_wrong_password_vs_ciphertext_tamper() {
+    let password = MasterPassword::new("pw".to_string());
+    let wrong = MasterPassword::new("wrong".to_string());
+
+    let payload = sample_payload();
+    let payload_json = serde_json::to_vec(&payload).expect("payload json");
 
     let header = VaultHeader {
         schema_version: 1,
@@ -97,88 +101,46 @@ fn wrong_password_and_tampering_are_indistinguishable() {
                 lanes: DEFAULT_ARGON2ID_LANES,
             },
             aead: AeadSuite::XChaCha20Poly1305,
-            salt: generate_vault_salt().unwrap(),
-            nonce: generate_xchacha20_nonce().unwrap(),
+            salt: generate_vault_salt().expect("salt"),
+            nonce: generate_xchacha20_nonce().expect("nonce"),
         },
+        duress: None,
     };
 
-    let payload = VaultPayload { entries: vec![] };
-    let plaintext = serde_json::to_vec(&payload).unwrap();
+    let bytes_ok = build_encrypted_container_bytes(&header, &payload_json, &password);
+    let parsed_ok = decode_vault_file(
+        Cursor::new(bytes_ok),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
 
-    // Case A: wrong password
-    let bytes = build_encrypted_container_bytes(&header, &plaintext, &password_ok);
-    let parsed = parse_container(&bytes);
-    let err_a = unlock_vault(&parsed, &password_bad).unwrap_err();
-    assert!(matches!(err_a, UnlockError::AuthFailed));
+    let err_wrong = unlock_vault(&parsed_ok, &wrong).unwrap_err();
+    assert!(matches!(err_wrong, UnlockError::AuthFailed));
 
-    // Case B: tampered ciphertext
-    let mut bytes_t = bytes.clone();
-    if let Some(last) = bytes_t.last_mut() {
-        *last ^= 0xFF;
-    }
-    let parsed_t = parse_container(&bytes_t);
-    let err_b = unlock_vault(&parsed_t, &password_ok).unwrap_err();
-    assert!(matches!(err_b, UnlockError::AuthFailed));
+    let mut bytes_t = build_encrypted_container_bytes(&header, &payload_json, &password);
+    let last = bytes_t.len() - 1;
+    bytes_t[last] ^= 0x01;
+
+    let parsed_t = decode_vault_file(
+        Cursor::new(bytes_t),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
+
+    let err_tamper = unlock_vault(&parsed_t, &password).unwrap_err();
+    assert!(matches!(err_tamper, UnlockError::AuthFailed));
 }
 
-/// Invalid KDF params must be rejected early
-///
-/// # Security
-/// This prevents an attacker-controlled header from forcing extreme resource usage
-/// The failure must surface as `UnlockError::Kdf(_)`
 #[test]
-fn invalid_kdf_params_are_rejected() {
+fn no_oracle_aad_tamper_is_auth_failed() {
     let password = MasterPassword::new("pw".to_string());
 
-    // Deliberately invalid: mem_kib below minimum
-    let header = VaultHeader {
-        schema_version: 1,
-        vault_id: Uuid::new_v4(),
-        crypto: CryptoHeader {
-            kdf: KdfParams::Argon2id {
-                mem_kib: 1,
-                time_cost: DEFAULT_ARGON2ID_TIME_COST,
-                lanes: DEFAULT_ARGON2ID_LANES,
-            },
-            aead: AeadSuite::XChaCha20Poly1305,
-            salt: [0u8; 32],
-            nonce: generate_xchacha20_nonce().unwrap(),
-        },
-    };
-
-    // Payload is irrelevant: KDF validation must fail before decryption
-    let bytes = {
-        let header_bytes = serde_json::to_vec(&header).unwrap();
-
-        let format_version: u16 = 1;
-        let mode: u8 = StorageMode::Encrypted as u8;
-
-        let mut out = Vec::new();
-        out.extend_from_slice(&MAGIC);
-        out.extend_from_slice(&format_version.to_le_bytes());
-        out.push(mode);
-        out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&header_bytes);
-        out.extend_from_slice(&(0u64).to_le_bytes()); // empty payload
-        out
-    };
-
-    let parsed = parse_container(&bytes);
-
-    let err = unlock_vault_to_plaintext_json(&parsed, &password).unwrap_err();
-    match err {
-        UnlockError::Kdf(KdfError::InvalidParams) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-/// Tampering with AAD must map to `AuthFailed`, not to a more specific error
-///
-/// # Security
-/// Ensures the unlock flow does not create an authentication oracle
-#[test]
-fn aad_tampering_maps_to_auth_failed() {
-    let password = MasterPassword::new("pw".to_string());
+    let payload = sample_payload();
+    let payload_json = serde_json::to_vec(&payload).expect("payload json");
 
     let header = VaultHeader {
         schema_version: 1,
@@ -190,19 +152,114 @@ fn aad_tampering_maps_to_auth_failed() {
                 lanes: DEFAULT_ARGON2ID_LANES,
             },
             aead: AeadSuite::XChaCha20Poly1305,
-            salt: generate_vault_salt().unwrap(),
-            nonce: generate_xchacha20_nonce().unwrap(),
+            salt: generate_vault_salt().expect("salt"),
+            nonce: generate_xchacha20_nonce().expect("nonce"),
         },
+        duress: None,
     };
 
-    let payload = VaultPayload { entries: vec![] };
-    let plaintext = serde_json::to_vec(&payload).unwrap();
-
-    let bytes = build_encrypted_container_bytes(&header, &plaintext, &password);
-    let mut parsed = parse_container(&bytes);
+    let bytes = build_encrypted_container_bytes(&header, &payload_json, &password);
+    let mut parsed = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
 
     parsed.header_bytes[0] ^= 0x01;
 
     let err = unlock_vault(&parsed, &password).unwrap_err();
     assert!(matches!(err, UnlockError::AuthFailed));
+}
+
+#[test]
+fn invalid_kdf_params_are_rejected() {
+    let password = MasterPassword::new("pw".to_string());
+    let payload = sample_payload();
+    let payload_json = serde_json::to_vec(&payload).expect("payload json");
+
+    let header = VaultHeader {
+        schema_version: 1,
+        vault_id: Uuid::new_v4(),
+        crypto: CryptoHeader {
+            kdf: KdfParams::Argon2id {
+                mem_kib: 1,   // far below minimum policy
+                time_cost: 1, // too low
+                lanes: 0,     // invalid
+            },
+            aead: AeadSuite::XChaCha20Poly1305,
+            salt: generate_vault_salt().expect("salt"),
+            nonce: generate_xchacha20_nonce().expect("nonce"),
+        },
+        duress: None,
+    };
+
+    let bytes = build_encrypted_container_bytes(&header, &payload_json, &password);
+    let parsed = decode_vault_file(
+        Cursor::new(bytes),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
+
+    let err = unlock_vault_to_plaintext_json(&parsed, &password).unwrap_err();
+    assert!(matches!(err, UnlockError::Kdf(KdfError::InvalidParams)));
+}
+
+#[test]
+fn duress_no_oracle_wrong_password_vs_tamper() {
+    let primary_pw = MasterPassword::new("primary".to_string());
+    let decoy_pw = MasterPassword::new("decoy".to_string());
+    let wrong_pw = MasterPassword::new("wrong".to_string());
+
+    let primary_payload = sample_payload();
+    let decoy_payload = sample_payload();
+
+    let kdf = VaultKdfPolicy {
+        mem_kib: DEFAULT_ARGON2ID_MEM_KIB,
+        time_cost: DEFAULT_ARGON2ID_TIME_COST,
+        lanes: DEFAULT_ARGON2ID_LANES,
+    };
+
+    let vf = create_duress_vault(
+        &primary_pw,
+        &decoy_pw,
+        &primary_payload,
+        &decoy_payload,
+        1,
+        kdf,
+    )
+    .expect("create duress vault");
+
+    let bytes_ok = vipervault_core::vault::codec::encode_vault_storage(&vf.header, &vf.storage, 1)
+        .expect("encode");
+    let parsed_ok = decode_vault_file(
+        Cursor::new(bytes_ok),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
+
+    let err_wrong = unlock_vault(&parsed_ok, &wrong_pw).unwrap_err();
+    assert!(matches!(err_wrong, UnlockError::AuthFailed));
+
+    let mut bytes_t =
+        vipervault_core::vault::codec::encode_vault_storage(&vf.header, &vf.storage, 1)
+            .expect("encode");
+    let last = bytes_t.len() - 1;
+    bytes_t[last] ^= 0x01;
+
+    let parsed_t = decode_vault_file(
+        Cursor::new(bytes_t),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
+
+    let err_tamper = unlock_vault(&parsed_t, &primary_pw).unwrap_err();
+    assert!(matches!(err_tamper, UnlockError::AuthFailed));
 }

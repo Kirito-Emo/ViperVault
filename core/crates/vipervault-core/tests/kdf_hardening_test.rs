@@ -4,116 +4,144 @@
 //! Argon2id hardening tests
 //!
 //! # Scope
-//! These tests validate that the KDF layer:
-//! - enforces parameter policy (min/max bounds)
-//! - rejects invalid configurations (DoS prevention)
-//! - behaves safely without panics
+//! These tests validate rejection behavior and boundary enforcement for the KDF layer:
+//! - invalid policy parameters are rejected
+//! - lower and upper bounds are enforced
+//! - output size remains fixed
 //!
 //! # Security
-//! - Prevents attackers from embedding extreme Argon2 parameters in a vault header that would cause excessive CPU/RAM usage
-//! - Ensures consistent error behavior (coarse-grained errors, no oracle)
+//! The KDF must reject unsafe or abusive parameter choices to prevent:
+//! - weak derivation settings
+//! - excessive memory/time amplification
+//! - accidental policy regressions
 
 use vipervault_core::crypto::kdf::{
     DEFAULT_ARGON2ID_LANES, DEFAULT_ARGON2ID_MEM_KIB, DEFAULT_ARGON2ID_TIME_COST, KdfError,
-    MAX_ARGON2ID_LANES, MAX_ARGON2ID_MEM_KIB, MAX_ARGON2ID_TIME_COST,
-    derive_master_key_from_password, validate_argon2id_params,
+    derive_master_key_from_password, generate_vault_salt,
 };
 use vipervault_core::memory::MasterPassword;
 
+/// Default project parameters must remain accepted
 #[test]
-fn validate_rejects_low_memory() {
-    let res = validate_argon2id_params(
-        DEFAULT_ARGON2ID_MEM_KIB - 1,
-        DEFAULT_ARGON2ID_TIME_COST,
-        DEFAULT_ARGON2ID_LANES,
-    );
-    assert!(matches!(res, Err(KdfError::InvalidParams)));
-}
-
-#[test]
-fn validate_rejects_high_memory() {
-    let res = validate_argon2id_params(
-        MAX_ARGON2ID_MEM_KIB + 1,
-        DEFAULT_ARGON2ID_TIME_COST,
-        DEFAULT_ARGON2ID_LANES,
-    );
-    assert!(matches!(res, Err(KdfError::InvalidParams)));
-}
-
-#[test]
-fn validate_rejects_low_time_cost() {
-    let res = validate_argon2id_params(
-        DEFAULT_ARGON2ID_MEM_KIB,
-        DEFAULT_ARGON2ID_TIME_COST - 1,
-        DEFAULT_ARGON2ID_LANES,
-    );
-    assert!(matches!(res, Err(KdfError::InvalidParams)));
-}
-
-#[test]
-fn validate_rejects_high_time_cost() {
-    let res = validate_argon2id_params(
-        DEFAULT_ARGON2ID_MEM_KIB,
-        MAX_ARGON2ID_TIME_COST + 1,
-        DEFAULT_ARGON2ID_LANES,
-    );
-    assert!(matches!(res, Err(KdfError::InvalidParams)));
-}
-
-#[test]
-fn validate_rejects_wrong_lanes() {
-    // Project policy enforces lanes == DEFAULT_ARGON2ID_LANES (currently 1)
-    let res = validate_argon2id_params(
-        DEFAULT_ARGON2ID_MEM_KIB,
-        DEFAULT_ARGON2ID_TIME_COST,
-        DEFAULT_ARGON2ID_LANES + 1,
-    );
-    assert!(matches!(res, Err(KdfError::InvalidParams)));
-
-    let res2 = validate_argon2id_params(
-        DEFAULT_ARGON2ID_MEM_KIB,
-        DEFAULT_ARGON2ID_TIME_COST,
-        MAX_ARGON2ID_LANES + 1,
-    );
-    assert!(matches!(res2, Err(KdfError::InvalidParams)));
-}
-
-/// Derivation must fail if parameters violate policy
-///
-/// # Security
-/// This ensures untrusted vault headers cannot force unsafe resource usage
-#[test]
-fn derive_rejects_invalid_params() {
+fn default_policy_params_are_valid() {
     let password = MasterPassword::new("pw".to_string());
-    let salt = [0u8; 32];
+    let salt = generate_vault_salt().expect("salt");
 
-    let res = derive_master_key_from_password(
+    let key = derive_master_key_from_password(
         &password,
         &salt,
-        1, // far below minimum
+        DEFAULT_ARGON2ID_MEM_KIB,
         DEFAULT_ARGON2ID_TIME_COST,
         DEFAULT_ARGON2ID_LANES,
-    );
+    )
+    .expect("kdf");
 
-    assert!(matches!(res, Err(KdfError::InvalidParams)));
+    assert_eq!(key.as_bytes().len(), 32);
 }
 
-/// Derivation should succeed on maximum allowed parameters
+/// Minimum accepted policy values must remain valid
+#[test]
+fn minimum_policy_params_are_valid() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let key = derive_master_key_from_password(&password, &salt, 64 * 1024, 3, 1).expect("kdf");
+
+    assert_eq!(key.as_bytes().len(), 32);
+}
+
+/// Memory cost below the minimum must be rejected
+#[test]
+fn memory_cost_below_minimum_is_rejected() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let err = derive_master_key_from_password(&password, &salt, 32 * 1024, 3, 1).unwrap_err();
+
+    assert!(matches!(err, KdfError::InvalidParams));
+}
+
+/// Time cost below the minimum must be rejected
+#[test]
+fn time_cost_below_minimum_is_rejected() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let err = derive_master_key_from_password(&password, &salt, 64 * 1024, 2, 1).unwrap_err();
+
+    assert!(matches!(err, KdfError::InvalidParams));
+}
+
+/// Lanes below the minimum must be rejected
+#[test]
+fn lanes_below_minimum_is_rejected() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let err = derive_master_key_from_password(&password, &salt, 64 * 1024, 3, 0).unwrap_err();
+
+    assert!(matches!(err, KdfError::InvalidParams));
+}
+
+/// Memory cost above the maximum must be rejected
 ///
 /// # Security
-/// Ensures that the configured maxima are actually usable for legitimate vaults
+/// Prevents abusive allocations and policy bypass via untrusted headers
 #[test]
-fn derive_accepts_max_allowed_params() {
+fn memory_cost_above_maximum_is_rejected() {
     let password = MasterPassword::new("pw".to_string());
-    let salt = [1u8; 32];
+    let salt = generate_vault_salt().expect("salt");
 
-    let res = derive_master_key_from_password(
-        &password,
-        &salt,
-        MAX_ARGON2ID_MEM_KIB,
-        MAX_ARGON2ID_TIME_COST,
-        DEFAULT_ARGON2ID_LANES,
-    );
+    let err = derive_master_key_from_password(&password, &salt, 1024 * 1024 + 1, 3, 1).unwrap_err();
 
-    assert!(res.is_ok());
+    assert!(matches!(err, KdfError::InvalidParams));
+}
+
+/// Time cost above the maximum must be rejected
+#[test]
+fn time_cost_above_maximum_is_rejected() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let err = derive_master_key_from_password(&password, &salt, 64 * 1024, 11, 1).unwrap_err();
+
+    assert!(matches!(err, KdfError::InvalidParams));
+}
+
+/// Lanes above the maximum must be rejected
+#[test]
+fn lanes_above_maximum_is_rejected() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let err = derive_master_key_from_password(&password, &salt, 64 * 1024, 3, 4).unwrap_err();
+
+    assert!(matches!(err, KdfError::InvalidParams));
+}
+
+/// Boundary: the documented maximum accepted policy values must still work
+#[test]
+fn maximum_policy_params_are_valid() {
+    let password = MasterPassword::new("pw".to_string());
+    let salt = generate_vault_salt().expect("salt");
+
+    let key = derive_master_key_from_password(&password, &salt, 1024 * 1024, 10, 3).expect("kdf");
+
+    assert_eq!(key.as_bytes().len(), 32);
+}
+
+/// Different salts must remain accepted even across repeated invocations
+///
+/// # Security
+/// Random per-vault salts do not trigger stateful failures
+#[test]
+fn multiple_random_salts_remain_valid() {
+    let password = MasterPassword::new("pw".to_string());
+
+    for _ in 0..8 {
+        let salt = generate_vault_salt().expect("salt");
+        let key = derive_master_key_from_password(&password, &salt, 64 * 1024, 3, 1)
+            .expect("kdf with random salt");
+        assert_eq!(key.as_bytes().len(), 32);
+    }
 }

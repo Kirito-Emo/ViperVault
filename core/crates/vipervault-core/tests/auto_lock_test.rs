@@ -27,6 +27,20 @@ fn empty_payload_json() -> Vec<u8> {
     serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize empty payload")
 }
 
+/// Serialize a payload with a single entry as plaintext JSON bytes
+fn non_empty_payload_json() -> Vec<u8> {
+    let entry = vipervault_core::entries::types::VaultEntry::new_secure_note(
+        "note".to_string(),
+        "secret".to_string(),
+    )
+    .expect("entry");
+
+    serde_json::to_vec(&VaultPayload {
+        entries: vec![entry],
+    })
+    .expect("serialize payload")
+}
+
 /// Allow spawned tasks to run and arm timers
 async fn settle_runtime() {
     yield_now().await;
@@ -88,6 +102,7 @@ async fn activity_resets_auto_lock_timer() {
 
     // Notify activity -> timer reset
     manager.notify_activity();
+    settle_runtime().await;
 
     // Advance again; should still be unlocked
     advance(Duration::from_secs(2)).await;
@@ -114,7 +129,7 @@ async fn repeated_activity_keeps_unlocked_until_quiet_period() {
     for _ in 0..5 {
         advance(Duration::from_secs(1)).await;
         manager.notify_activity();
-        yield_now().await;
+        settle_runtime().await;
         assert!(manager.get_payload().await.is_some());
     }
 
@@ -167,15 +182,71 @@ async fn re_unlock_restarts_timer_and_replaces_state() {
 
     // Re-unlock
     manager
-        .unlock_with_plaintext_json(empty_payload_json(), Duration::from_secs(5))
+        .unlock_with_plaintext_json(non_empty_payload_json(), Duration::from_secs(5))
         .await;
 
     settle_runtime().await;
 
-    assert!(manager.get_payload().await.is_some());
+    let payload = manager
+        .get_payload()
+        .await
+        .expect("payload after re-unlock");
+    assert_eq!(payload.entries.len(), 1);
 
     // Timer must apply to the new unlock
     advance(Duration::from_secs(6)).await;
+    yield_now().await;
+    assert!(manager.get_payload().await.is_none());
+}
+
+/// Boundary: zero timeout must lock on the next timer turn
+#[tokio::test(start_paused = true)]
+async fn zero_timeout_locks_immediately_after_unlock_cycle() {
+    let manager = VaultLockManager::new();
+
+    manager
+        .unlock_with_plaintext_json(empty_payload_json(), Duration::ZERO)
+        .await;
+
+    settle_runtime().await;
+
+    assert!(manager.get_payload().await.is_none());
+}
+
+/// Unlocking while already unlocked must replace the payload and restart the timer
+#[tokio::test(start_paused = true)]
+async fn unlock_while_unlocked_replaces_payload_and_timer() {
+    let manager = VaultLockManager::new();
+
+    manager
+        .unlock_with_plaintext_json(empty_payload_json(), Duration::from_secs(2))
+        .await;
+    settle_runtime().await;
+
+    advance(Duration::from_secs(1)).await;
+    yield_now().await;
+    assert_eq!(
+        manager.get_payload().await.expect("payload").entries.len(),
+        0
+    );
+
+    manager
+        .unlock_with_plaintext_json(non_empty_payload_json(), Duration::from_secs(4))
+        .await;
+    settle_runtime().await;
+
+    let payload = manager
+        .get_payload()
+        .await
+        .expect("payload after replacement");
+    assert_eq!(payload.entries.len(), 1);
+
+    // The new timer must govern the state
+    advance(Duration::from_secs(3)).await;
+    yield_now().await;
+    assert!(manager.get_payload().await.is_some());
+
+    advance(Duration::from_secs(2)).await;
     yield_now().await;
     assert!(manager.get_payload().await.is_none());
 }

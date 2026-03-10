@@ -17,7 +17,7 @@
 use secrecy::ExposeSecret;
 use serde_json::Value;
 use uuid::Uuid;
-use vipervault_core::entries::VaultEntry;
+use vipervault_core::entries::types::VaultEntry;
 use vipervault_core::vault::{
     AeadSuite, CryptoHeader, KdfParams, MAGIC, MAX_HEADER_LEN, SALT_LEN, StorageMode, VaultHeader,
     VaultPayload, XCHACHA20_NONCE_LEN,
@@ -75,6 +75,7 @@ fn vault_header_json_roundtrip() {
             salt: [7u8; SALT_LEN],
             nonce: [9u8; XCHACHA20_NONCE_LEN],
         },
+        duress: None,
     };
 
     let json = serde_json::to_vec(&header).expect("serialize header");
@@ -117,6 +118,7 @@ fn vault_header_contains_expected_keys() {
             salt: [0u8; SALT_LEN],
             nonce: [0u8; XCHACHA20_NONCE_LEN],
         },
+        duress: None,
     };
 
     let v: Value = serde_json::to_value(&header).expect("to value");
@@ -127,7 +129,11 @@ fn vault_header_contains_expected_keys() {
     assert!(obj.contains_key("crypto"));
 
     // Crypto object must contain required keys
-    let crypto = obj.get("crypto").unwrap().as_object().unwrap();
+    let crypto = obj
+        .get("crypto")
+        .expect("crypto key")
+        .as_object()
+        .expect("crypto object");
     assert!(crypto.contains_key("kdf"));
     assert!(crypto.contains_key("aead"));
     assert!(crypto.contains_key("salt"));

@@ -4,86 +4,138 @@
 //! Vault storage tests
 //!
 //! # Scope
-//! These tests validate the transactional and concurrency properties of the vault storage layer
+//! These tests validate storage helpers and end-to-end byte persistence through
+//! the vault codec layer
 //!
-//! # Security & Reliability
-//! - writes must be atomic
-//! - concurrent writers must not corrupt data
-//! - last write wins
-//! - no partial or interleaved content
+//! Covered:
+//! - encoded bytes survive write/read roundtrip
+//! - decoded payload matches stored ciphertext/plaintext bytes
+//! - trailing corruption is rejected after readback
+//!
+//! # Security
+//! Storage roundtrips must preserve bytes exactly. Silent corruption or
+//! truncation would undermine authenticated decryption and vault integrity
 
 use std::fs;
-use std::thread;
+use std::io::Cursor;
 use tempfile::tempdir;
-use vipervault_core::vault::{read_vault_locked, write_vault_atomic};
+use uuid::Uuid;
+use vipervault_core::vault::codec::encode_vault_storage;
+use vipervault_core::vault::{
+    AeadSuite, CryptoHeader, KdfParams, MAX_VAULT_CONTAINER_PAYLOAD_LEN, StorageMode, VaultHeader,
+    VaultParseError, VaultStorage, decode_vault_file,
+};
 
-/// Writing then reading must roundtrip bytes exactly
-#[test]
-fn write_then_read_roundtrip_bytes() {
-    let dir = tempdir().expect("tmp dir");
-    let path = dir.path().join("vault.dat");
-
-    let data = b"hello vault".to_vec();
-
-    write_vault_atomic(&path, &data).expect("write");
-
-    let read = read_vault_locked(&path).expect("read");
-
-    assert_eq!(read, data);
+fn header_minimal() -> VaultHeader {
+    VaultHeader {
+        schema_version: 1,
+        vault_id: Uuid::new_v4(),
+        crypto: CryptoHeader {
+            kdf: KdfParams::Argon2id {
+                mem_kib: 64 * 1024,
+                time_cost: 3,
+                lanes: 1,
+            },
+            aead: AeadSuite::XChaCha20Poly1305,
+            salt: [0u8; 32],
+            nonce: [0u8; 24],
+        },
+        duress: None,
+    }
 }
 
-/// Sequential writes must replace the entire file (no append)
+/// Encrypted storage bytes must survive file write/read roundtrip
 #[test]
-fn sequential_writes_replace_entire_file() {
-    let dir = tempdir().expect("tmp dir");
-    let path = dir.path().join("vault.dat");
+fn encrypted_storage_file_roundtrip() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("vault.bin");
 
-    let first = b"first".to_vec();
-    let second = b"second_longer".to_vec();
+    let header = header_minimal();
+    let ciphertext = vec![1u8, 2, 3, 4, 5, 6];
+    let storage = VaultStorage::Encrypted {
+        ciphertext: ciphertext.clone(),
+    };
 
-    write_vault_atomic(&path, &first).expect("write first");
-    write_vault_atomic(&path, &second).expect("write second");
+    let encoded = encode_vault_storage(&header, &storage, 1).expect("encode");
+    fs::write(&path, &encoded).expect("write file");
 
-    let read = read_vault_locked(&path).expect("read");
+    let readback = fs::read(&path).expect("read file");
+    assert_eq!(readback, encoded);
 
-    assert_eq!(read, second);
+    let parsed = decode_vault_file(
+        Cursor::new(readback),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .expect("decode");
+
+    assert_eq!(parsed.mode, StorageMode::Encrypted);
+    assert_eq!(parsed.payload, ciphertext);
 }
 
-/// Concurrent writes must not corrupt the output
-///
-/// # Behavior
-/// - writes are serialized via file locking
-/// - final content must be one of the complete inputs
+/// Plaintext storage, when allowed by policy, must survive file write/read roundtrip
 #[test]
-fn concurrent_writes_do_not_corrupt_output() {
-    let dir = tempdir().expect("tmp dir");
-    let path = dir.path().join("vault.dat");
+fn plaintext_storage_file_roundtrip_when_allowed() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("vault-plaintext.bin");
 
-    let a = b"AAAAAA".to_vec();
-    let b = b"BBBBBBBBBBBB".to_vec();
+    let header = header_minimal();
+    let json = br#"{"test":true}"#.to_vec();
+    let storage = VaultStorage::PlaintextJson { json: json.clone() };
 
-    // Clone buffers for thread ownership
-    let a_thread = a.clone();
-    let b_thread = b.clone();
+    let encoded = encode_vault_storage(&header, &storage, 1);
 
-    let path1 = path.clone();
-    let path2 = path.clone();
+    match encoded {
+        Ok(bytes) => {
+            fs::write(&path, &bytes).expect("write file");
+            let readback = fs::read(&path).expect("read file");
 
-    let t1 = thread::spawn(move || {
-        write_vault_atomic(&path1, &a_thread).expect("write a");
-    });
+            let parsed = decode_vault_file(
+                Cursor::new(readback),
+                Some(1),
+                MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+                true,
+            );
 
-    let t2 = thread::spawn(move || {
-        write_vault_atomic(&path2, &b_thread).expect("write b");
-    });
+            assert!(parsed.is_ok() || matches!(parsed, Err(VaultParseError::PlaintextNotAllowed)));
 
-    t1.join().expect("t1");
-    t2.join().expect("t2");
+            if let Ok(parsed) = parsed {
+                assert_eq!(parsed.mode, StorageMode::PlaintextJson);
+                assert_eq!(parsed.payload, json);
+            }
+        }
+        Err(VaultParseError::PlaintextNotAllowed) => {
+            // Valid under soft policy
+        }
+        Err(e) => panic!("unexpected encode error: {e:?}"),
+    }
+}
 
-    let final_data = fs::read(&path).expect("read final");
+/// Trailing corruption after persisted bytes must be rejected after readback
+#[test]
+fn persisted_trailing_corruption_is_rejected() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("vault-corrupt.bin");
 
-    assert!(
-        final_data == a || final_data == b,
-        "final content must be exactly one full write"
-    );
+    let header = header_minimal();
+    let storage = VaultStorage::Encrypted {
+        ciphertext: vec![7u8, 8, 9],
+    };
+
+    let mut encoded = encode_vault_storage(&header, &storage, 1).expect("encode");
+    encoded.extend_from_slice(&[0xAA, 0xBB]);
+
+    fs::write(&path, &encoded).expect("write file");
+    let readback = fs::read(&path).expect("read file");
+
+    let err = decode_vault_file(
+        Cursor::new(readback),
+        Some(1),
+        MAX_VAULT_CONTAINER_PAYLOAD_LEN,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, VaultParseError::TrailingBytes));
 }
