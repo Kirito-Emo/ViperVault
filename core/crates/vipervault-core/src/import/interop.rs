@@ -19,9 +19,9 @@
 use super::ImportError;
 use crate::core::{allow_clipboard_under_soft_policy, policy::PolicyContext};
 use crate::entries::types::{EntryType, VaultEntry};
-use crate::totp::decode::decode_base32_secret_strict;
+use crate::totp::decode::{canonicalize_base32_for_export, decode_base32_secret_strict};
 use crate::vault::VaultPayload;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
@@ -132,7 +132,6 @@ pub fn import_interop_quarantine(
 /// # Security
 /// - Denied in decoy mode
 /// - Denied under anti-debug soft policy
-/// - Re-validates invariants after merge
 /// - Does not attempt deduplication at commit time (deterministic)
 pub fn commit_quarantined_import_into_payload(
     policy: PolicyContext,
@@ -153,8 +152,6 @@ pub fn commit_quarantined_import_into_payload(
     }
 
     existing.entries.append(&mut incoming);
-
-    validate_payload_invariants(existing)?;
 
     Ok(())
 }
@@ -246,9 +243,13 @@ fn parse_otpauth_totp_list(
                 .unwrap_or(b""),
         );
 
-        let secret_raw = decode_base32_secret_strict(totp.secret_b32.expose_secret())
+        let canonical_secret_b32 = canonicalize_base32_for_export(totp.secret_b32.expose_secret())
             .map_err(|_| ImportError::InvalidFormat)?;
-        let secret_h = sha256_fixed(secret_raw.as_slice());
+
+        decode_base32_secret_strict(&canonical_secret_b32)
+            .map_err(|_| ImportError::InvalidFormat)?;
+
+        let secret_h = sha256_fixed(canonical_secret_b32.as_bytes());
 
         let key = TotpDedupKey {
             issuer_h,
@@ -260,6 +261,9 @@ fn parse_otpauth_totp_list(
             // Duplicate entry, skip deterministically
             continue;
         }
+
+        let mut totp = totp;
+        totp.secret_b32 = SecretString::new(canonical_secret_b32.into());
 
         let entry =
             VaultEntry::new_totp(title, totp, None).map_err(|_| ImportError::InvalidData)?;

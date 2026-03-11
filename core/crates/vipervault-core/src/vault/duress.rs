@@ -101,7 +101,7 @@ fn decrypt_with_crypto_header(
     ciphertext: &[u8],
     password: &MasterPassword,
 ) -> Result<Zeroizing<Vec<u8>>, VaultParseError> {
-    // Currently only Argon2id is supported in this project.
+    // Currently only Argon2id is supported in this project
     let (mem_kib, time_cost, lanes) = match ch.kdf {
         KdfParams::Argon2id {
             mem_kib,

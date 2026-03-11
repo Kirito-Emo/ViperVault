@@ -11,8 +11,8 @@
 //! - header "minimal metadata" shape (keys present, no unexpected omissions)
 //!
 //! # Security
-//! These invariants are important because they define the on-disk and in-memory trust boundary.
-//! A regression in these constants or discriminants can break compatibility or weaken hardening.
+//! These invariants are important because they define the on-disk and in-memory trust boundary \
+//! A regression in these constants or discriminants can break compatibility or weaken hardening
 
 use secrecy::ExposeSecret;
 use serde_json::Value;

@@ -13,8 +13,8 @@
 //! - re-unlock behavior
 //!
 //! # Security
-//! These tests ensure that decrypted secrets are not kept in memory
-//! longer than intended under normal usage.
+//! These tests ensure that decrypted secrets are not kept in memory longer than intended
+//! under normal usage
 
 use std::time::Duration;
 use tokio::task::yield_now;

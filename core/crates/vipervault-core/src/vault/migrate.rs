@@ -7,10 +7,10 @@
 //!
 //! # Security notes
 //! - Requires the primary password (vault must be unlocked)
-//! - Re-encrypts payload into dual ciphertext envelope
-//! - Preserves vault_id and schema_version
+//! - Re-encrypts payload into a dual-ciphertext envelope
+//! - Preserves `vault_id` and `schema_version`
 //! - Uses fresh salts and nonces for both primary and decoy branches
-//! - Avoids panics: returns coarse-grained errors (no oracles)
+//! - Avoids panic-based oracles
 
 use super::create::VaultKdfPolicy;
 use super::duress::encrypt_duress_envelope;
@@ -20,7 +20,8 @@ use super::types::{
     VaultFile, VaultHeader, VaultPayload, VaultStorage, XCHACHA20_NONCE_LEN,
 };
 use crate::memory::MasterPassword;
-use rand::RngCore;
+use rand::TryRng;
+use rand::rngs::SysRng;
 
 /// Convert an encrypted vault into a duress-enabled vault
 ///
@@ -32,8 +33,8 @@ use rand::RngCore;
 /// - `kdf`: KDF policy to use for both primary and decoy branches
 ///
 /// # Errors
-/// - `InvalidHeader` if vault already has duress enabled or is not encrypted
-/// - `AuthFailed` if primary decryption fails (wrong password OR tampering)
+/// - `InvalidHeader` if the vault is already duress-enabled or not encrypted
+/// - `AuthFailed` if decryption fails
 pub fn enable_duress_on_vault(
     vault: &VaultFile,
     primary_password: &MasterPassword,
@@ -93,11 +94,18 @@ pub fn enable_duress_on_vault(
     let mut salt2 = [0u8; SALT_LEN];
     let mut nonce2 = [0u8; XCHACHA20_NONCE_LEN];
 
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut salt1);
-    rng.fill_bytes(&mut nonce1);
-    rng.fill_bytes(&mut salt2);
-    rng.fill_bytes(&mut nonce2);
+    SysRng
+        .try_fill_bytes(&mut salt1)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut nonce1)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut salt2)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut nonce2)
+        .map_err(|_| VaultParseError::Serialize)?;
 
     let primary_crypto = CryptoHeader {
         kdf: kdf.as_kdf_params(),

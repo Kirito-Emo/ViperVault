@@ -13,7 +13,7 @@
 //!
 //! # Security
 //! These tests ensure that deserialization and validation reject malformed
-//! entries without panics and without constructing inconsistent objects.
+//! entries without panics and without constructing inconsistent objects
 
 use vipervault_core::entries::{
     EntryError, MAX_NOTE_LEN, MAX_PASSWORD_LEN, MAX_TITLE_LEN, VaultEntry,

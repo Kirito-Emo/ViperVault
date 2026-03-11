@@ -23,7 +23,7 @@ pub enum OtpAuthError {
     #[error("invalid parameters")]
     InvalidParams,
 
-    /// Export denied by policy (e.g. decoy vault).
+    /// Export denied by policy (e.g. decoy vault)
     #[error("operation denied by policy")]
     PolicyDenied,
 }

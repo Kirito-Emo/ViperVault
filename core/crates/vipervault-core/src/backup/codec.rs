@@ -16,8 +16,8 @@
 //! Signature is computed over all bytes from magic up to the end of payload bytes
 //!
 //! # Security notes
-//! - Signature verification requires password-derived signing key
-//! - Does not distinguish tamper vs wrong password (AuthFailed)
+//! - Signature verification requires a password-derived signing key
+//! - The implementation does not distinguish tamper from wrong password (AuthFailed)
 
 use super::error::BackupError;
 use super::types::{
@@ -28,15 +28,21 @@ use crate::crypto::kdf::derive_master_key_from_password;
 use crate::memory::MasterPassword;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use rand::RngCore;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use sha2::Sha256;
+use zeroize::Zeroizing;
 
 /// Encode a signed backup
 ///
 /// # Parameters
-/// - `policy`: session policy (denies in decoy)
-/// - `password`: master password used to derive signing key seed
-/// - `vault_container_bytes`: the exact bytes of the vault container (output of vault codec)
+/// - `policy`: session policy
+/// - `password`: master password used to derive the signing key
+/// - `vault_container_bytes`: exact vault container bytes
+/// - `kdf`: backup KDF policy
+///
+/// # Errors
+/// Returns a coarse-grained [`BackupError`] on failure
 pub fn encode_signed_backup(
     policy: PolicyContext,
     password: &MasterPassword,
@@ -52,8 +58,9 @@ pub fn encode_signed_backup(
     }
 
     let mut salt = [0u8; 32];
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut salt);
+    SysRng
+        .try_fill_bytes(&mut salt)
+        .map_err(|_| BackupError::Serialize)?;
 
     let header = BackupHeader {
         version: BACKUP_VERSION,
@@ -93,7 +100,7 @@ pub fn encode_signed_backup(
 /// Decode a signed backup and return the vault container bytes
 ///
 /// # Security
-/// Returns `AuthFailed` if signature verification fails or password is wrong
+/// Returns `AuthFailed` if verification fails or the password is wrong
 pub fn decode_signed_backup(
     policy: PolicyContext,
     password: &MasterPassword,
@@ -166,8 +173,8 @@ pub fn decode_signed_backup(
 /// Derive the Ed25519 signing key from the master password
 ///
 /// # Design
-/// Argon2id derives a master key using `header.salt` and `header.kdf`
-/// HKDF-SHA256 expands into a 32-byte Ed25519 seed
+/// Argon2id derives a master key using `header.salt` and `header.kdf` \
+/// HKDF-SHA256 expands that key into a 32-byte Ed25519 seed
 fn derive_backup_signing_key(
     password: &MasterPassword,
     header: &BackupHeader,
@@ -185,7 +192,10 @@ fn derive_backup_signing_key(
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Derive verifying key (same derivation as signing key)
+/// Derive the verifying key using the same password-based derivation path
+///
+/// # Security
+/// This still derives the signing seed internally, but keeps the seed lifetime minimal
 fn derive_backup_verifying_key(
     password: &MasterPassword,
     header: &BackupHeader,
@@ -194,11 +204,14 @@ fn derive_backup_verifying_key(
     Ok(signing.verifying_key())
 }
 
-/// Expand a 32-byte seed from the master key using HKDF-SHA256
-fn hkdf_expand_seed(master_key: &[u8]) -> Result<[u8; 32], BackupError> {
+/// Expand a 32-byte Ed25519 seed from the master key using HKDF-SHA256
+///
+/// # Security
+/// The returned seed is wrapped in [`Zeroizing`] to reduce residual memory exposure
+fn hkdf_expand_seed(master_key: &[u8]) -> Result<Zeroizing<[u8; 32]>, BackupError> {
     let hk = Hkdf::<Sha256>::new(None, master_key);
-    let mut okm = [0u8; 32];
-    hk.expand(b"vipervault-backup-ed25519-seed", &mut okm)
+    let mut okm = Zeroizing::new([0u8; 32]);
+    hk.expand(b"vipervault-backup-ed25519-seed", &mut okm[..])
         .map_err(|_| BackupError::Serialize)?;
     Ok(okm)
 }

@@ -10,7 +10,7 @@
 //! - Enforces a minimum secret length after decoding (entropy floor)
 
 use super::error::TotpError;
-use base32ct::{Base32, Encoding};
+use base32ct::{Base32Upper, Base32UpperUnpadded, Encoding};
 use zeroize::Zeroizing;
 
 /// Maximum accepted Base32 secret length (characters)
@@ -35,15 +35,41 @@ pub fn decode_base32_secret_strict(secret_b32: &str) -> Result<Zeroizing<Vec<u8>
         return Err(TotpError::InvalidSecret);
     }
 
-    // Allocate output buffer with the maximum possible decoded length for this input
-    let max_out = (secret_b32.len() * 5).div_ceil(8);
+    if !secret_b32
+        .bytes()
+        .all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7' | b'='))
+    {
+        return Err(TotpError::InvalidSecret);
+    }
+
+    let trimmed = secret_b32.trim_end_matches('=');
+
+    if trimmed.is_empty() {
+        return Err(TotpError::InvalidSecret);
+    }
+
+    if trimmed.contains('=') {
+        return Err(TotpError::InvalidSecret);
+    }
+
+    match trimmed.len() % 8 {
+        0 | 2 | 4 | 5 | 7 => {}
+        _ => return Err(TotpError::InvalidSecret),
+    }
+
+    let max_out = (trimmed.len() * 5).div_ceil(8);
     let mut out = vec![0u8; max_out];
 
-    let decoded_len = {
-        let decoded = Base32::decode(secret_b32.as_bytes(), &mut out)
-            .map_err(|_| TotpError::InvalidSecret)?;
+    let decoded_len = if trimmed.len() == secret_b32.len() {
+        let decoded =
+            Base32UpperUnpadded::decode(trimmed, &mut out).map_err(|_| TotpError::InvalidSecret)?;
+        decoded.len()
+    } else {
+        let decoded =
+            Base32Upper::decode(secret_b32, &mut out).map_err(|_| TotpError::InvalidSecret)?;
         decoded.len()
     };
+
     out.truncate(decoded_len);
 
     if out.len() < MIN_SECRET_RAW_LEN {

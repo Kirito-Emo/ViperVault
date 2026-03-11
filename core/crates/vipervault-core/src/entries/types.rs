@@ -48,7 +48,7 @@ pub struct TotpSecret {
     /// Base32-encoded secret (no spaces; uppercase recommended)
     ///
     /// ## Security note
-    /// Kept as `SecretString` and never logged.
+    /// Kept as `SecretString` and never logged
     pub secret_b32: SecretString,
     pub digits: u8,               // Output digits (typically 6 or 8)
     pub period_secs: u32,         // Period in seconds (typically 30)
@@ -260,6 +260,8 @@ impl VaultEntry {
         validate_title(&title)?;
         validate_note(&note)?;
 
+        let secret_value = note.clone();
+
         let entry = Self {
             meta: EntryMetadata {
                 id: Uuid::new_v4(),
@@ -269,7 +271,7 @@ impl VaultEntry {
                 title: SecretString::new(title.into()),
                 note: Some(SecretString::new(note.into())),
                 username: None,
-                secret: SecretString::new("".to_string().into()),
+                secret: SecretString::new(secret_value.into()),
                 extra: None,
                 totp: None,
             },

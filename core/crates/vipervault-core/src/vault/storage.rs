@@ -103,7 +103,7 @@ pub fn write_vault_atomic(path: &Path, bytes: &[u8]) -> Result<(), VaultStorageE
 
             tmp.write_all(bytes).map_err(VaultStorageError::Io)?;
 
-            // Ensure bytes are flushed to disk.
+            // Ensure bytes are flushed to disk
             tmp.sync_all().map_err(VaultStorageError::Io)?;
         }
 

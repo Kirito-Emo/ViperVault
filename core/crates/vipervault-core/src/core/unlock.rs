@@ -10,7 +10,6 @@ use crate::vault::duress::{UnlockOutcome, unlock_duress_envelope};
 use crate::vault::{
     DualCiphertextEnvelope, KdfParams, ParsedVaultFile, StorageMode, VaultParseError, VaultPayload,
 };
-use tokio::task;
 use zeroize::Zeroizing;
 
 /// Errors returned by the unlock flow
@@ -45,7 +44,6 @@ pub enum UnlockError {
 /// # Security
 /// - Applies delay only on `AuthFailed` (wrong password OR tampering)
 /// - Does not delay on parse/kdf/payload errors to avoid DoS via malformed files
-/// - Runs the heavy KDF + decrypt path inside `spawn_blocking`
 /// - In duress mode, a successful decoy unlock does NOT reset the throttle state
 pub async fn unlock_session_gated(
     gate: &AuthGate,
@@ -54,17 +52,15 @@ pub async fn unlock_session_gated(
 ) -> Result<UnlockedVaultSession, UnlockError> {
     let (outcome, payload) = gate
         .run(
-            || async move {
-                task::spawn_blocking(move || unlock_vault_with_outcome(&parsed, &password))
-                    .await
-                    .map_err(|_| UnlockError::Internal)?
-            },
+            || async move { unlock_vault_with_outcome(&parsed, &password) },
             |e: &UnlockError| matches!(e, UnlockError::AuthFailed),
-            |(outcome, _payload): &(UnlockOutcome, VaultPayload)| {
-                matches!(outcome, UnlockOutcome::Primary)
-            },
+            |_| false,
         )
         .await?;
+
+    if outcome == UnlockOutcome::Primary {
+        gate.reset().await;
+    }
 
     Ok(UnlockedVaultSession::new(outcome, payload))
 }

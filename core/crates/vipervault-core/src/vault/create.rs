@@ -20,8 +20,10 @@ use super::types::{
 use crate::crypto::aead::encrypt_xchacha20poly1305;
 use crate::crypto::kdf::derive_master_key_from_password;
 use crate::memory::MasterPassword;
-use rand::RngCore;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// KDF policy used when creating new vaults
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +34,7 @@ pub struct VaultKdfPolicy {
 }
 
 impl VaultKdfPolicy {
-    /// Build KDF params for headers
+    /// Build KDF params for vault headers
     pub(crate) fn as_kdf_params(self) -> KdfParams {
         KdfParams::Argon2id {
             mem_kib: self.mem_kib,
@@ -45,7 +47,7 @@ impl VaultKdfPolicy {
 /// Create an encrypted vault
 ///
 /// # Notes
-/// This produces a vault with `VaultHeader.duress = None` and a single ciphertext payload
+/// This produces a vault with `VaultHeader.duress = None`
 pub fn create_encrypted_vault(
     password: &MasterPassword,
     payload: &VaultPayload,
@@ -55,9 +57,12 @@ pub fn create_encrypted_vault(
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; XCHACHA20_NONCE_LEN];
 
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut nonce);
+    SysRng
+        .try_fill_bytes(&mut salt)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|_| VaultParseError::Serialize)?;
 
     let crypto = CryptoHeader {
         kdf: kdf.as_kdf_params(),
@@ -79,7 +84,8 @@ pub fn create_encrypted_vault(
         derive_master_key_from_password(password, &salt, kdf.mem_kib, kdf.time_cost, kdf.lanes)
             .map_err(|_| VaultParseError::InvalidHeader)?;
 
-    let plaintext = serde_json::to_vec(payload).map_err(|_| VaultParseError::Serialize)?;
+    let plaintext =
+        Zeroizing::new(serde_json::to_vec(payload).map_err(|_| VaultParseError::Serialize)?);
 
     let ciphertext = encrypt_xchacha20poly1305(&master_key, &nonce, &plaintext, &header_bytes)
         .map_err(|_| VaultParseError::Serialize)?;
@@ -97,7 +103,7 @@ pub fn create_encrypted_vault(
 /// - `decoy_password`: coercion password
 ///
 /// # Notes
-/// The resulting payload bytes store a JSON-serialized `DualCiphertextEnvelope`
+/// The resulting payload bytes store a serialized dual-ciphertext envelope
 pub fn create_duress_vault(
     primary_password: &MasterPassword,
     decoy_password: &MasterPassword,
@@ -111,11 +117,18 @@ pub fn create_duress_vault(
     let mut salt2 = [0u8; SALT_LEN];
     let mut nonce2 = [0u8; XCHACHA20_NONCE_LEN];
 
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut salt1);
-    rng.fill_bytes(&mut nonce1);
-    rng.fill_bytes(&mut salt2);
-    rng.fill_bytes(&mut nonce2);
+    SysRng
+        .try_fill_bytes(&mut salt1)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut nonce1)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut salt2)
+        .map_err(|_| VaultParseError::Serialize)?;
+    SysRng
+        .try_fill_bytes(&mut nonce2)
+        .map_err(|_| VaultParseError::Serialize)?;
 
     let primary_crypto = CryptoHeader {
         kdf: kdf.as_kdf_params(),

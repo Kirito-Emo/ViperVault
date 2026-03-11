@@ -9,27 +9,32 @@
 //! - Remain configurable and proportional (security vs UX)
 //!
 //! # Security notes
-//! - Apply delay only to authentication failures (wrong password OR tampering)
+//! - Apply delay only to authentication failures
 //! - Do not differentiate failure reasons
-//! - Add jitter to avoid deterministic timing fingerprints
+//! - Add jitter to reduce deterministic timing fingerprints
 
-use rand::RngCore;
+use rand::Rng;
 use std::time::{Duration, Instant};
 
 /// Tuning parameters for unlock throttling
 #[derive(Debug, Clone, Copy)]
 pub struct UnlockThrottlePolicy {
-    pub quiet_period: Duration, // Quiet period after which the failure streak decays
-    pub max_delay: Duration,    // Maximum delay applied on failures
-    pub jitter_max: Duration,   // Jitter range added to every delay, inclusive
+    /// Quiet period after which the failure streak decays
+    pub quiet_period: Duration,
+
+    /// Maximum delay applied on failures
+    pub max_delay: Duration,
+
+    /// Random jitter added to each delay, inclusive
+    pub jitter_max: Duration,
 }
 
 impl Default for UnlockThrottlePolicy {
     fn default() -> Self {
         Self {
-            quiet_period: Duration::from_secs(60), // After this time without failures, reduce the streak
-            max_delay: Duration::from_secs(8), // Cap to avoid an attacker forcing long UI freezes (availability)
-            jitter_max: Duration::from_millis(250), // Small random jitter to reduce timing fingerprinting
+            quiet_period: Duration::from_secs(60 * 10), // After this time without failures, reduce the streak (10 min)
+            max_delay: Duration::from_secs(60), // Cap to avoid an attacker forcing long UI freezes (availability) (1 min)
+            jitter_max: Duration::from_millis(1000), // Small random jitter to reduce timing fingerprinting (1 sec)
         }
     }
 }
@@ -48,6 +53,9 @@ pub struct UnlockRateLimiter {
 
 impl UnlockRateLimiter {
     /// Register a successful unlock attempt
+    ///
+    /// # Security
+    /// Successful authentication resets the failure streak
     pub fn on_success(&mut self) {
         self.failures = 0;
         self.last_failure = None;
@@ -72,54 +80,46 @@ impl UnlockRateLimiter {
         self.failures = self.failures.saturating_add(1);
         self.last_failure = Some(now);
 
-        // Progressive schedule (proportional):
-        // - 1..=2: 0ms
-        // - 3..=4: 500ms
-        // - 5..=6: 1s
-        // - 7..=8: 2s
-        // - 9..=10: 4s
-        // - 11+: exponential-ish growth, capped
-        let base = match self.failures {
-            0..=2 => Duration::from_millis(0),
-            3..=4 => Duration::from_millis(500),
-            5..=6 => Duration::from_secs(1),
-            7..=8 => Duration::from_secs(2),
-            9..=10 => Duration::from_secs(4),
-            _ => Duration::from_secs(6),
-        };
+        let base = password_delay_for_failures(self.failures);
+        base.min(policy.max_delay)
+            .saturating_add(jitter(policy.jitter_max))
+    }
 
-        // Extra growth beyond 10 failures: add 1s per failure, capped
-        let extra = if self.failures > 10 {
-            Duration::from_secs((self.failures - 10) as u64)
-        } else {
-            Duration::from_millis(0)
-        };
-
-        let mut delay = base.saturating_add(extra);
-        if delay > policy.max_delay {
-            delay = policy.max_delay;
-        }
-
-        delay.saturating_add(jitter(policy.jitter_max))
+    /// Return the current failure count
+    pub fn failures(&self) -> u32 {
+        self.failures
     }
 }
 
-fn jitter(max: Duration) -> Duration {
-    if max == Duration::from_millis(0) {
-        return Duration::from_millis(0);
+/// Compute the progressive delay schedule for master-password failures
+///
+/// # Security
+/// This schedule is moderate but cumulative:
+/// repeated failures quickly become expensive while preserving usability
+fn password_delay_for_failures(failures: u32) -> Duration {
+    match failures {
+        0..=2 => Duration::ZERO,
+        3..=4 => Duration::from_secs(1),
+        5..=6 => Duration::from_secs(5),
+        7..=8 => Duration::from_secs(10),
+        9..=10 => Duration::from_secs(15),
+        11..=12 => Duration::from_secs(30),
+        13..=15 => Duration::from_secs(60),
+        _ => Duration::from_secs(300),
     }
+}
 
-    // Convert to millis for uniform jitter selection
+/// Generate a uniform random jitter in the inclusive range `[0, max]`
+fn jitter(max: Duration) -> Duration {
     let max_ms = max.as_millis();
     if max_ms == 0 {
-        return Duration::from_millis(0);
+        return Duration::ZERO;
     }
 
     let mut b = [0u8; 8];
     let mut rng = rand::rng();
     rng.fill_bytes(&mut b);
     let r = u64::from_le_bytes(b);
-
     let j = r % (max_ms as u64 + 1);
     Duration::from_millis(j)
 }

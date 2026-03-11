@@ -68,7 +68,9 @@ impl AuthGate {
                     l.on_failure_delay(self.policy)
                 };
 
-                tokio::time::sleep(delay).await;
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
             }
             Err(_) => {
                 // No delay for non-auth errors
@@ -100,11 +102,28 @@ impl AuthGate {
                     l.on_failure_delay(self.policy)
                 };
 
-                std::thread::sleep(delay);
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
             }
             Err(_) => {}
         }
 
         res
+    }
+
+    /// Reset the authentication backoff state
+    ///
+    /// # Security
+    /// This is intended for explicit reset points after successful primary authentication
+    pub async fn reset(&self) {
+        let mut l = self.limiter.lock().await;
+        l.on_success();
+    }
+
+    /// Blocking reset for non-async contexts
+    pub fn reset_blocking(&self) {
+        let mut l = self.limiter.blocking_lock();
+        l.on_success();
     }
 }

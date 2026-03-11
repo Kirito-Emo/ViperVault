@@ -6,8 +6,8 @@
 use crate::memory::{KeyMaterial, MasterPassword};
 use crate::vault::SALT_LEN;
 use argon2::{Algorithm, Argon2, Params, Version};
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use zeroize::Zeroizing;
 
 /// Default Argon2id parameters (OWASP-compliant)
@@ -23,7 +23,7 @@ pub const MAX_ARGON2ID_LANES: u32 = 1;
 /// Errors returned by the KDF layer
 ///
 /// # Security
-/// Errors are intentionally coarse-grained (avoid leaking details)
+/// Errors are intentionally coarse-grained to avoid leaking details
 #[derive(Debug, thiserror::Error)]
 pub enum KdfError {
     /// Invalid or unsupported KDF parameters
@@ -34,34 +34,32 @@ pub enum KdfError {
     #[error("argon2 failure")]
     Argon2Failure,
 
-    /// OS randomness source failed (extremely rare)
-    #[error("os rng failure")]
-    OsRng,
+    /// System RNG failure
+    #[error("sys rng failure")]
+    SysRng,
 }
 
-/// Generates a fresh random salt for a vault
+/// Generates a fresh random vault salt
 ///
 /// # Security
-/// - Salt MUST be unique per vault
-/// - Salt is NOT secret, but must be unpredictable and stored in the vault header
+/// - Salts are not secret
+/// - Salts must be unique per vault
+/// - This function relies on the operating system CSPRNG
 ///
 /// # Errors
-/// Returns [`KdfError::OsRng`] if the OS RNG fails
+/// Returns [`KdfError::SysRng`] if the system RNG fails
 pub fn generate_vault_salt() -> Result<[u8; SALT_LEN], KdfError> {
     let mut salt = [0u8; SALT_LEN];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut salt)
-        .map_err(|_| KdfError::OsRng)?;
+        .map_err(|_| KdfError::SysRng)?;
     Ok(salt)
 }
 
-/// Validates Argon2id parameters against minimums and maximums
+/// Validates Argon2id parameters against policy bounds
 ///
 /// # Security
-/// Enforces policy:
-/// - memory ≥ 64 MiB
-/// - iterations ≥ 3
-/// - parallelism = 1
+/// Enforces the allowed parameter range for resource usage and policy compliance
 ///
 /// # Errors
 /// Returns [`KdfError::InvalidParams`] if validation fails
@@ -76,11 +74,14 @@ pub fn validate_argon2id_params(mem_kib: u32, time_cost: u32, lanes: u32) -> Res
     Ok(())
 }
 
-/// Derives the master key from a [`MasterPassword`] using Argon2id
+/// Derives the vault master key from a master password
 ///
 /// # Security
-/// - Output wrapped in `KeyMaterial`
-/// - Zeroized automatically on drop
+/// - Output is wrapped in [`KeyMaterial`]
+/// - Temporary output is zeroized on drop
+///
+/// # Errors
+/// Returns [`KdfError::InvalidParams`] or [`KdfError::Argon2Failure`]
 pub fn derive_master_key_from_password(
     password: &MasterPassword,
     salt: &[u8; SALT_LEN],

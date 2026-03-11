@@ -7,8 +7,8 @@ use crate::memory::KeyMaterial;
 use crate::vault::XCHACHA20_NONCE_LEN;
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use zeroize::Zeroizing;
 
 /// Errors returned by the AEAD layer
@@ -17,15 +17,15 @@ use zeroize::Zeroizing;
 /// Errors are intentionally generic to reduce leakage
 #[derive(Debug, thiserror::Error)]
 pub enum AeadError {
-    /// OS RNG failure (extremely rare)
-    #[error("os rng failure")]
-    OsRng,
+    /// System RNG failure
+    #[error("sys rng failure")]
+    SysRng,
 
     /// Encryption failed
     #[error("encryption error")]
     Encrypt,
 
-    /// Decryption failed (wrong key or tampered ciphertext/AAD)
+    /// Decryption failed
     #[error("decryption error")]
     Decrypt,
 }
@@ -34,32 +34,32 @@ pub enum AeadError {
 ///
 /// # Security
 /// - Nonce MUST be unique per encryption under the same key
-/// - Nonce is not secret; store it in the vault header
+/// - This function relies on the operating system CSPRNG
 ///
 /// # Errors
-/// Returns [`AeadError::OsRng`] if OS RNG fails
+/// Returns [`AeadError::SysRng`] if the system RNG fails
 pub fn generate_xchacha20_nonce() -> Result<[u8; XCHACHA20_NONCE_LEN], AeadError> {
     let mut nonce = [0u8; XCHACHA20_NONCE_LEN];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
-        .map_err(|_| AeadError::OsRng)?;
+        .map_err(|_| AeadError::SysRng)?;
     Ok(nonce)
 }
 
 /// Encrypts plaintext using XChaCha20-Poly1305 with associated data
 ///
 /// # Parameters
-/// - `master_key`: 32-byte key (derived via Argon2id)
-/// - `nonce`: 24-byte XChaCha nonce
-/// - `plaintext`: data to encrypt (will be copied by the AEAD implementation)
-/// - `aad`: associated data (e.g., serialized header bytes) authenticated but not encrypted
+/// - `key`: 32-byte key
+/// - `nonce`: 24-byte XChaCha20 nonce
+/// - `plaintext`: plaintext bytes
+/// - `aad`: associated data authenticated but not encrypted
 ///
 /// # Returns
-/// Ciphertext bytes containing the authentication tag
+/// Ciphertext including the authentication tag
 ///
 /// # Security
-/// - Authenticate the vault header by passing its serialized bytes as `aad`
-/// - The returned ciphertext includes integrity protection (AEAD)
+/// - The caller should authenticate serialized header bytes through `aad`
+/// - The returned ciphertext provides confidentiality and integrity
 ///
 /// # Errors
 /// Returns [`AeadError::Encrypt`] on failure
@@ -86,20 +86,20 @@ pub fn encrypt_xchacha20poly1305(
 /// Decrypts ciphertext using XChaCha20-Poly1305 with associated data
 ///
 /// # Parameters
-/// - `master_key`: 32-byte key (derived via Argon2id)
-/// - `nonce`: 24-byte XChaCha nonce
-/// - `ciphertext`: ciphertext bytes with auth tag
-/// - `aad`: associated data that must match exactly (e.g., serialized header bytes)
+/// - `key`: 32-byte key
+/// - `nonce`: 24-byte XChaCha20 nonce
+/// - `ciphertext`: ciphertext including tag
+/// - `aad`: associated data that must match exactly
 ///
 /// # Returns
-/// Plaintext wrapped in `Zeroizing<Vec<u8>>`
+/// Plaintext wrapped in [`Zeroizing<Vec<u8>>`]
 ///
 /// # Security
-/// - If either ciphertext or AAD is modified, decryption fails
-/// - Caller should deserialize plaintext immediately and avoid extra copies
+/// - Any modification to ciphertext or AAD causes decryption failure
+/// - Callers should deserialize immediately and avoid unnecessary copies
 ///
 /// # Errors
-/// Returns [`AeadError::Decrypt`] if authentication fails (wrong key/tampering)
+/// Returns [`AeadError::Decrypt`] if authentication fails
 pub fn decrypt_xchacha20poly1305(
     key: &KeyMaterial,
     nonce: &[u8; XCHACHA20_NONCE_LEN],

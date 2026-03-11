@@ -4,8 +4,7 @@
 //! Policy tests
 //!
 //! # Scope
-//! These tests validate the security policy behavior associated with
-//! primary vs decoy unlock outcomes.
+//! These tests validate the security policy behavior associated with primary vs decoy unlock outcomes
 //!
 //! Covered:
 //! - policy context classification
@@ -13,8 +12,7 @@
 //! - primary allowance for normal operations
 //!
 //! # Security
-//! Decoy mode must reduce capabilities and deny sensitive operations
-//! such as export-like flows.
+//! Decoy mode must reduce capabilities and deny sensitive operations such as export-like flows
 
 use vipervault_core::core::policy::PolicyContext;
 use vipervault_core::vault::duress::UnlockOutcome;

@@ -28,7 +28,7 @@ kanban-plugin: board
 - [x] [[Unit tests for Argon2id and XChaCha20-Poly1305]]
 - [x] [[Integration tests for CRUD + auto-lock]]
 - [x] [[Stress test on file locking and race conditions]]
-- [ ] [[Security tests (MFA, duress, backup)]]
+- [x] [[Security tests (MFA, duress, backup)]]
 - [ ] [[Fuzzing for vault parsing serialization]]
 
 
