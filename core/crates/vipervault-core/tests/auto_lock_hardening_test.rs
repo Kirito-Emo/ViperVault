@@ -13,6 +13,8 @@
 //! - activity storms must not panic or prematurely lock
 //! - manual lock must dominate pending timers
 //! - concurrent readers during lock transitions must remain race-safe
+//! - multiple replaced timers must not affect the latest session
+//! - a pre-lock timer must not affect a later unlock
 //!
 //! # Security
 //! Auto-lock correctness is security-sensitive because stale timer bugs
@@ -95,6 +97,7 @@ async fn stale_timer_does_not_lock_new_session() {
         .await
         .expect("payload must remain unlocked");
     assert_eq!(payload.entries.len(), 1);
+    assert_eq!(payload.entries[0].to_summary().expose_title(), "second");
 
     // Eventually the new timer must still lock
     advance(Duration::from_secs(4)).await;
@@ -147,6 +150,7 @@ async fn rapid_unlock_lock_unlock_cycles_remain_coherent() {
 
     let payload = manager.get_payload().await.expect("payload");
     assert_eq!(payload.entries.len(), 1);
+    assert_eq!(payload.entries[0].to_summary().expose_title(), "second");
 
     advance(Duration::from_secs(6)).await;
     yield_now().await;
@@ -188,7 +192,7 @@ async fn activity_storm_keeps_vault_unlocked_until_quiet_period() {
         .await;
     settle_runtime().await;
 
-    // Spawn a task that floods the manager with activity notifications
+    // Flood the manager with activity notifications
     for _ in 0..100 {
         manager.notify_activity();
     }
@@ -235,4 +239,80 @@ async fn concurrent_reads_during_auto_lock_transition_are_race_safe() {
     assert!(a.is_some() || a.is_none());
     assert!(b.is_some() || b.is_none());
     assert!(c.is_some() || c.is_none());
+}
+
+/// Multiple replaced timers must not affect the final unlocked session
+///
+/// # Security
+/// Repeated session replacement must leave only the latest timer authoritative
+#[tokio::test(start_paused = true)]
+async fn multiple_replaced_timers_do_not_affect_latest_session() {
+    let manager = VaultLockManager::new();
+
+    manager
+        .unlock_with_plaintext_json(one_entry_payload_json("first"), Duration::from_secs(2))
+        .await;
+    settle_runtime().await;
+
+    manager
+        .unlock_with_plaintext_json(one_entry_payload_json("second"), Duration::from_secs(3))
+        .await;
+    settle_runtime().await;
+
+    manager
+        .unlock_with_plaintext_json(one_entry_payload_json("third"), Duration::from_secs(7))
+        .await;
+    settle_runtime().await;
+
+    // Advance past the first and second deadlines (only the final session must remain active)
+    advance(Duration::from_secs(4)).await;
+    yield_now().await;
+
+    let payload = manager
+        .get_payload()
+        .await
+        .expect("latest session must remain unlocked");
+    assert_eq!(payload.entries.len(), 1);
+    assert_eq!(payload.entries[0].to_summary().expose_title(), "third");
+
+    advance(Duration::from_secs(4)).await;
+    yield_now().await;
+    assert!(manager.get_payload().await.is_none());
+}
+
+/// A timer created before manual lock must not affect a later unlock
+///
+/// # Security
+/// A fresh unlock after an explicit lock must not inherit timer behavior from the pre-lock session
+#[tokio::test(start_paused = true)]
+async fn pre_lock_timer_cannot_lock_later_unlock() {
+    let manager = VaultLockManager::new();
+
+    manager
+        .unlock_with_plaintext_json(one_entry_payload_json("first"), Duration::from_secs(2))
+        .await;
+    settle_runtime().await;
+
+    manager.lock().await;
+    assert!(manager.get_payload().await.is_none());
+
+    manager
+        .unlock_with_plaintext_json(one_entry_payload_json("second"), Duration::from_secs(6))
+        .await;
+    settle_runtime().await;
+
+    // Advance past the original pre-lock timeout; the new session must remain active
+    advance(Duration::from_secs(3)).await;
+    yield_now().await;
+
+    let payload = manager
+        .get_payload()
+        .await
+        .expect("new session must remain unlocked");
+    assert_eq!(payload.entries.len(), 1);
+    assert_eq!(payload.entries[0].to_summary().expose_title(), "second");
+
+    advance(Duration::from_secs(4)).await;
+    yield_now().await;
+    assert!(manager.get_payload().await.is_none());
 }

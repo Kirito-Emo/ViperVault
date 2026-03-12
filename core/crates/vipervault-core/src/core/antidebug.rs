@@ -4,16 +4,31 @@
 //! Anti-debugging detection (best-effort)
 //!
 //! # Security
-//! This module provides mitigations, not guarantees
-//! Under debugging, sensitive features are degraded (soft policy)
+//! This module provides mitigations, not guarantees \
+//! Under debugging, sensitive features are degraded through a soft policy
+//!
+//! # Design
+//! Platform-specific detection is intentionally separated from policy decisions \
+//! This allows deterministic testing of policy behavior without depending on the
+//! runtime host environment
 
 use std::time::Duration;
+
+/// Maximum auto-lock timeout allowed under active debugging
+///
+/// # Security
+/// A shorter timeout reduces the exposure window of decrypted state when a
+/// debugger is attached
+pub const DEBUG_MAX_TIMEOUT_SECS: u64 = 30;
 
 /// Debugging detection result
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DebugStatus {
+    /// No debugger has been detected
     NotDebugged,
+    /// A debugger has been detected
     Debugged,
+    /// The runtime could not determine whether debugging is active
     Unknown,
 }
 
@@ -46,32 +61,77 @@ pub fn detect_debugging() -> DebugStatus {
     }
 }
 
+/// Evaluate whether clipboard operations are allowed for a given debug status
+///
+/// # Parameters
+/// - `status`: debug detection outcome used for policy evaluation
+///
+/// # Returns
+/// `true` when clipboard operations remain allowed under the soft policy
+///
+/// # Security
+/// Clipboard access is denied only when active debugging is detected \
+/// The `Unknown` state remains permissive in order to avoid unnecessary
+/// operational denial on unsupported or partially observable platforms
+pub fn allow_clipboard_for_status(status: DebugStatus) -> bool {
+    !matches!(status, DebugStatus::Debugged)
+}
+
 /// Whether clipboard operations are allowed under soft policy
 pub fn allow_clipboard_under_soft_policy() -> bool {
-    !matches!(detect_debugging(), DebugStatus::Debugged)
+    allow_clipboard_for_status(detect_debugging())
+}
+
+/// Evaluate whether plaintext export is allowed for a given debug status
+///
+/// # Parameters
+/// - `status`: debug detection outcome used for policy evaluation
+///
+/// # Returns
+/// `true` when plaintext export remains allowed under the soft policy
+///
+/// # Security
+/// Plaintext export dramatically lowers the cost of data exfiltration \
+/// Under active debugging, this operation is denied
+pub fn allow_export_for_status(status: DebugStatus) -> bool {
+    !matches!(status, DebugStatus::Debugged)
 }
 
 /// Whether plaintext export is allowed under soft policy
 ///
 /// # Security
-/// Plaintext export dramatically lowers the cost of data exfiltration
+/// Plaintext export dramatically lowers the cost of data exfiltration \
 /// Under debugging, this operation is denied
 pub fn allow_export_under_soft_policy() -> bool {
-    !matches!(detect_debugging(), DebugStatus::Debugged)
+    allow_export_for_status(detect_debugging())
 }
 
-/// Clamp auto-lock timeout when debugging is detected
-pub fn clamp_auto_lock_timeout_under_soft_policy(requested: Duration) -> Duration {
-    const DEBUG_MAX_TIMEOUT_SECS: u64 = 30;
-
-    if matches!(detect_debugging(), DebugStatus::Debugged) {
+/// Clamp an auto-lock timeout for a given debug status
+///
+/// # Parameters
+/// - `status`: debug detection outcome used for policy evaluation
+/// - `requested`: requested auto-lock timeout
+///
+/// # Returns
+/// The original timeout when no debugger is detected, otherwise the minimum
+/// between the requested timeout and [`DEBUG_MAX_TIMEOUT_SECS`]
+///
+/// # Security
+/// A debugger materially increases the risk associated with long-lived decrypted state \
+/// The timeout is therefore reduced under active debugging
+pub fn clamp_auto_lock_timeout_for_status(status: DebugStatus, requested: Duration) -> Duration {
+    if matches!(status, DebugStatus::Debugged) {
         requested.min(Duration::from_secs(DEBUG_MAX_TIMEOUT_SECS))
     } else {
         requested
     }
 }
 
-/* platform-specific detectors unchanged */
+/// Clamp auto-lock timeout when debugging is detected
+pub fn clamp_auto_lock_timeout_under_soft_policy(requested: Duration) -> Duration {
+    clamp_auto_lock_timeout_for_status(detect_debugging(), requested)
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn detect_debugging_linux_proc() -> DebugStatus {
     use std::fs;

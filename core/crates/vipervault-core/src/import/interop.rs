@@ -9,7 +9,7 @@
 //!
 //! # Security design
 //! - Requires explicit user intent
-//! - Denied in decoy
+//! - Denied in decoy mode
 //! - Denied under anti-debug soft policy
 //! - Bounded input size and bounded record count
 //! - Bounded per-line length (anti-DoS)
@@ -17,7 +17,7 @@
 //! - Quarantine keeps only the parsed payload (no raw bytes retained)
 
 use super::ImportError;
-use crate::core::{allow_clipboard_under_soft_policy, policy::PolicyContext};
+use crate::core::policy::PolicyContext;
 use crate::entries::types::{EntryType, VaultEntry};
 use crate::totp::decode::{canonicalize_base32_for_export, decode_base32_secret_strict};
 use crate::vault::VaultPayload;
@@ -52,11 +52,11 @@ pub enum ImportIntent {
     UserConfirmed,
 }
 
-/// Supported interop formats (future-proof)
+/// Supported interop formats
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum InteropFormat {
-    /// Provider-agnostic otpauth URI list (TOTP only)
+    /// Provider-agnostic OTPAuth URI list (TOTP only)
     OtpAuthTotpUriList,
     /// Placeholder for future implementations
     Other,
@@ -65,7 +65,7 @@ pub enum InteropFormat {
 /// Quarantined import result
 ///
 /// # Security
-/// - Holds sensitive material (never logged)
+/// Holds sensitive material (never logged)
 #[derive(Debug)]
 pub struct QuarantinedImport {
     format: InteropFormat,
@@ -83,7 +83,7 @@ impl QuarantinedImport {
         self.payload
     }
 
-    /// Return the format
+    /// Return the interop format
     pub fn format(&self) -> InteropFormat {
         self.format
     }
@@ -92,20 +92,14 @@ impl QuarantinedImport {
 /// Import plaintext data into quarantine
 ///
 /// # Security
-/// - Denied in decoy mode
-/// - Denied under anti-debug soft policy
+/// Denied by the centralized session/runtime policy
 pub fn import_interop_quarantine(
     policy: PolicyContext,
     intent: ImportIntent,
     format: InteropFormat,
     bytes: &[u8],
 ) -> Result<QuarantinedImport, ImportError> {
-    if policy.is_decoy() {
-        return Err(ImportError::PolicyDenied);
-    }
-
-    // Soft-policy (when a debugger is detected, sensitive operations are denied)
-    if !allow_clipboard_under_soft_policy() {
+    if !policy.allow_plaintext_import() {
         return Err(ImportError::PolicyDenied);
     }
 
@@ -130,19 +124,14 @@ pub fn import_interop_quarantine(
 /// Commit a quarantined import into an existing payload
 ///
 /// # Security
-/// - Denied in decoy mode
-/// - Denied under anti-debug soft policy
-/// - Does not attempt deduplication at commit time (deterministic)
+/// - Denied by the centralized session/runtime policy
+/// - Does not attempt deduplication at commit time
 pub fn commit_quarantined_import_into_payload(
     policy: PolicyContext,
     existing: &mut VaultPayload,
     quarantined: QuarantinedImport,
 ) -> Result<(), ImportError> {
-    if policy.is_decoy() {
-        return Err(ImportError::PolicyDenied);
-    }
-
-    if !allow_clipboard_under_soft_policy() {
+    if !policy.allow_plaintext_import() {
         return Err(ImportError::PolicyDenied);
     }
 
@@ -156,7 +145,7 @@ pub fn commit_quarantined_import_into_payload(
     Ok(())
 }
 
-/// Dedup key for interop-imported TOTP entries
+/// Deduplication key for imported TOTP entries
 ///
 /// # Security
 /// Stores only hashes, never plaintext issuer/account/secret
@@ -167,13 +156,13 @@ struct TotpDedupKey {
     secret_h: [u8; 32],
 }
 
-/// Minimal parser: a newline-separated list of `otpauth://totp/...` URIs
+/// Parse a newline-separated list of `otpauth://totp/...` URIs
 ///
 /// # Security
 /// - Bounded number of lines
 /// - Bounded per-line length (anti-DoS)
-/// - Deduplicates by (issuer, account, secret-hash)
-/// - Each URI is parsed via the hardened otpauth parser (policy-gated)
+/// - Deduplicates by `(issuer, account, secret-hash)`
+/// - Each URI is parsed via the hardened OTPAuth parser
 fn parse_otpauth_totp_list(
     policy: PolicyContext,
     bytes: &[u8],
@@ -263,7 +252,7 @@ fn parse_otpauth_totp_list(
         }
 
         let mut totp = totp;
-        totp.secret_b32 = SecretString::new(canonical_secret_b32.into());
+        totp.secret_b32 = SecretString::new(canonical_secret_b32.clone().into());
 
         let entry =
             VaultEntry::new_totp(title, totp, None).map_err(|_| ImportError::InvalidData)?;
@@ -273,26 +262,24 @@ fn parse_otpauth_totp_list(
     Ok(VaultPayload { entries })
 }
 
-/// Validate payload invariants (strict for interop quarantine)
+/// Validate payload invariants for quarantined interop imports
 fn validate_payload_invariants(payload: &VaultPayload) -> Result<(), ImportError> {
     if payload.entries.len() > MAX_INTEROP_ENTRIES {
         return Err(ImportError::PayloadTooLarge);
     }
 
-    for e in &payload.entries {
-        if e.meta.entry_type != EntryType::Totp {
+    for entry in &payload.entries {
+        if entry.meta.entry_type != EntryType::Totp {
             return Err(ImportError::InvalidData);
         }
 
-        let Some(ref t) = e.secret.totp else {
+        let Some(ref totp) = entry.secret.totp else {
             return Err(ImportError::InvalidData);
         };
 
-        // Validate TOTP parameters (bounds + strict alphabet)
-        t.validate().map_err(|_| ImportError::InvalidData)?;
+        totp.validate().map_err(|_| ImportError::InvalidData)?;
 
-        // Basic consistency check: keep secret fields aligned
-        if e.secret.secret.expose_secret() != t.secret_b32.expose_secret() {
+        if entry.secret.secret.expose_secret() != totp.secret_b32.expose_secret() {
             return Err(ImportError::InvalidData);
         }
     }
@@ -300,9 +287,10 @@ fn validate_payload_invariants(payload: &VaultPayload) -> Result<(), ImportError
     Ok(())
 }
 
-fn sha256_fixed(input: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(input);
-    let out = h.finalize();
-    out.into()
+/// Compute a fixed SHA-256 digest
+fn sha256_fixed(bytes: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }

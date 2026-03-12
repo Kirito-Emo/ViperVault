@@ -15,9 +15,9 @@
 //!
 //! Signature is computed over all bytes from magic up to the end of payload bytes
 //!
-//! # Security notes
+//! # Security
 //! - Signature verification requires a password-derived signing key
-//! - The implementation does not distinguish tamper from wrong password (AuthFailed)
+//! - The implementation does not distinguish tamper from wrong password (`AuthFailed`)
 
 use super::error::BackupError;
 use super::types::{
@@ -43,13 +43,16 @@ use zeroize::Zeroizing;
 ///
 /// # Errors
 /// Returns a coarse-grained [`BackupError`] on failure
+///
+/// # Security
+/// Denied by the centralized session/runtime policy
 pub fn encode_signed_backup(
     policy: PolicyContext,
     password: &MasterPassword,
     vault_container_bytes: &[u8],
     kdf: BackupKdfPolicy,
 ) -> Result<Vec<u8>, BackupError> {
-    if policy.is_decoy() {
+    if !policy.allow_signed_backup_transfer() {
         return Err(BackupError::PolicyDenied);
     }
 
@@ -100,13 +103,14 @@ pub fn encode_signed_backup(
 /// Decode a signed backup and return the vault container bytes
 ///
 /// # Security
-/// Returns `AuthFailed` if verification fails or the password is wrong
+/// Returns `AuthFailed` if verification fails or the password is wrong \
+/// Denied by the centralized session/runtime policy
 pub fn decode_signed_backup(
     policy: PolicyContext,
     password: &MasterPassword,
     backup_bytes: &[u8],
 ) -> Result<Vec<u8>, BackupError> {
-    if policy.is_decoy() {
+    if !policy.allow_signed_backup_transfer() {
         return Err(BackupError::PolicyDenied);
     }
 
@@ -138,6 +142,7 @@ pub fn decode_signed_backup(
     if payload_len > MAX_BACKUP_PAYLOAD_LEN {
         return Err(BackupError::PayloadTooLarge);
     }
+
     let payload_len_usize: usize = payload_len
         .try_into()
         .map_err(|_| BackupError::InvalidFormat)?;
@@ -216,45 +221,37 @@ fn hkdf_expand_seed(master_key: &[u8]) -> Result<Zeroizing<[u8; 32]>, BackupErro
     Ok(okm)
 }
 
-// ---------------------------
-// Minimal parsing helpers
-// ---------------------------
-
-fn read_u16_le(input: &[u8], cursor: &mut usize) -> Result<u16, BackupError> {
-    let b = read_exact::<2>(input, cursor)?;
-    Ok(u16::from_le_bytes(b))
-}
-
-fn read_u32_le(input: &[u8], cursor: &mut usize) -> Result<u32, BackupError> {
-    let b = read_exact::<4>(input, cursor)?;
-    Ok(u32::from_le_bytes(b))
-}
-
-fn read_u64_le(input: &[u8], cursor: &mut usize) -> Result<u64, BackupError> {
-    let b = read_exact::<8>(input, cursor)?;
-    Ok(u64::from_le_bytes(b))
-}
-
-fn read_vec(input: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, BackupError> {
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-    let end = cursor.checked_add(len).ok_or(BackupError::InvalidFormat)?;
-    if end > input.len() {
+fn read_exact<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], BackupError> {
+    let end = cursor.checked_add(N).ok_or(BackupError::InvalidFormat)?;
+    if end > bytes.len() {
         return Err(BackupError::InvalidFormat);
     }
-    let out = input[*cursor..end].to_vec();
+
+    let mut out = [0u8; N];
+    out.copy_from_slice(&bytes[*cursor..end]);
     *cursor = end;
     Ok(out)
 }
 
-fn read_exact<const N: usize>(input: &[u8], cursor: &mut usize) -> Result<[u8; N], BackupError> {
-    let end = cursor.checked_add(N).ok_or(BackupError::InvalidFormat)?;
-    if end > input.len() {
+fn read_u16_le(bytes: &[u8], cursor: &mut usize) -> Result<u16, BackupError> {
+    Ok(u16::from_le_bytes(read_exact::<2>(bytes, cursor)?))
+}
+
+fn read_u32_le(bytes: &[u8], cursor: &mut usize) -> Result<u32, BackupError> {
+    Ok(u32::from_le_bytes(read_exact::<4>(bytes, cursor)?))
+}
+
+fn read_u64_le(bytes: &[u8], cursor: &mut usize) -> Result<u64, BackupError> {
+    Ok(u64::from_le_bytes(read_exact::<8>(bytes, cursor)?))
+}
+
+fn read_vec(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, BackupError> {
+    let end = cursor.checked_add(len).ok_or(BackupError::InvalidFormat)?;
+    if end > bytes.len() {
         return Err(BackupError::InvalidFormat);
     }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&input[*cursor..end]);
+
+    let out = bytes[*cursor..end].to_vec();
     *cursor = end;
     Ok(out)
 }

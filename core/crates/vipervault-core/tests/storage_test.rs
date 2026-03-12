@@ -11,19 +11,21 @@
 //! - encoded bytes survive write/read roundtrip
 //! - decoded payload matches stored ciphertext/plaintext bytes
 //! - trailing corruption is rejected after readback
+//! - atomic write creates missing files
+//! - atomic overwrite replaces previous bytes exactly
+//! - public locked read observes exact persisted bytes
 //!
 //! # Security
-//! Storage roundtrips must preserve bytes exactly. Silent corruption or
-//! truncation would undermine authenticated decryption and vault integrity
+//! Storage roundtrips must preserve bytes exactly. Silent corruption, truncation or
+//! partial writes would undermine authenticated decryption and vault integrity
 
-use std::fs;
 use std::io::Cursor;
 use tempfile::tempdir;
 use uuid::Uuid;
 use vipervault_core::vault::codec::encode_vault_storage;
 use vipervault_core::vault::{
     AeadSuite, CryptoHeader, KdfParams, MAX_VAULT_CONTAINER_PAYLOAD_LEN, StorageMode, VaultHeader,
-    VaultParseError, VaultStorage, decode_vault_file,
+    VaultParseError, VaultStorage, decode_vault_file, read_vault_locked, write_vault_atomic,
 };
 
 fn header_minimal() -> VaultHeader {
@@ -57,9 +59,9 @@ fn encrypted_storage_file_roundtrip() {
     };
 
     let encoded = encode_vault_storage(&header, &storage, 1).expect("encode");
-    fs::write(&path, &encoded).expect("write file");
+    write_vault_atomic(&path, &encoded).expect("atomic write");
 
-    let readback = fs::read(&path).expect("read file");
+    let readback = read_vault_locked(&path).expect("locked read");
     assert_eq!(readback, encoded);
 
     let parsed = decode_vault_file(
@@ -88,8 +90,8 @@ fn plaintext_storage_file_roundtrip_when_allowed() {
 
     match encoded {
         Ok(bytes) => {
-            fs::write(&path, &bytes).expect("write file");
-            let readback = fs::read(&path).expect("read file");
+            write_vault_atomic(&path, &bytes).expect("atomic write");
+            let readback = read_vault_locked(&path).expect("locked read");
 
             let parsed = decode_vault_file(
                 Cursor::new(readback),
@@ -126,8 +128,8 @@ fn persisted_trailing_corruption_is_rejected() {
     let mut encoded = encode_vault_storage(&header, &storage, 1).expect("encode");
     encoded.extend_from_slice(&[0xAA, 0xBB]);
 
-    fs::write(&path, &encoded).expect("write file");
-    let readback = fs::read(&path).expect("read file");
+    write_vault_atomic(&path, &encoded).expect("atomic write");
+    let readback = read_vault_locked(&path).expect("locked read");
 
     let err = decode_vault_file(
         Cursor::new(readback),
@@ -138,4 +140,44 @@ fn persisted_trailing_corruption_is_rejected() {
     .unwrap_err();
 
     assert!(matches!(err, VaultParseError::TrailingBytes));
+}
+
+/// Atomic write must create the target file when it does not already exist
+#[test]
+fn atomic_write_creates_missing_target_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("new-vault.bin");
+
+    assert!(!path.exists());
+
+    write_vault_atomic(&path, b"new-bytes").expect("atomic write");
+
+    assert!(path.exists());
+    assert_eq!(read_vault_locked(&path).expect("locked read"), b"new-bytes");
+}
+
+/// Atomic overwrite must replace previous bytes exactly
+#[test]
+fn atomic_write_replaces_existing_bytes_exactly() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("vault.bin");
+
+    write_vault_atomic(&path, b"first-version").expect("first write");
+    write_vault_atomic(&path, b"second-version").expect("second write");
+
+    let readback = read_vault_locked(&path).expect("locked read");
+    assert_eq!(readback, b"second-version");
+}
+
+/// Public locked read must observe the exact bytes persisted by the atomic writer
+#[test]
+fn atomic_write_and_locked_read_roundtrip_exact_bytes() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("vault.bin");
+    let bytes = b"vault-container-bytes";
+
+    write_vault_atomic(&path, bytes).expect("atomic write");
+    let readback = read_vault_locked(&path).expect("locked read");
+
+    assert_eq!(readback, bytes);
 }

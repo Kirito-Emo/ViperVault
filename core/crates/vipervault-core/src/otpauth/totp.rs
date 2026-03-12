@@ -7,16 +7,16 @@
 //! `otpauth://totp/<label>?secret=...&issuer=...&algorithm=SHA1&digits=6&period=30`
 //!
 //! # Notes
-//! Labels are treated as user-visible title (stored encrypted in the vault) and
-//! `issuer` and `account_name` are separately parsed when possible
+//! Labels are treated as user-visible title and `issuer` and `account_name` are
+//! separately parsed when possible
 //!
 //! # Security hardening
-//! - Policy-gated (denied in decoy)
+//! - Policy-gated
 //! - Bounded URI length and query pairs (anti-DoS)
 //! - Strict algorithm allowlist (SHA1/SHA256/SHA512)
 //! - Issuer mismatch policy: prefer explicit `issuer=` parameter over label issuer
 //! - Validates issuer/account/title against spoofing controls
-//! - Rejects gross-script-mixing (basic homograph mitigation)
+//! - Rejects gross script mixing (basic homograph mitigation)
 
 use super::error::OtpAuthError;
 use crate::core::policy::PolicyContext;
@@ -27,7 +27,7 @@ use percent_encoding::percent_decode_str;
 use secrecy::SecretString;
 use url::Url;
 
-/// Maximum accepted otpauth URI length (anti-DoS)
+/// Maximum accepted OTPAuth URI length (anti-DoS)
 pub const MAX_OTP_AUTH_URI_LEN: usize = 4096;
 
 /// Maximum number of query pairs processed (anti-DoS)
@@ -35,17 +35,17 @@ pub const MAX_QUERY_PAIRS: usize = 64;
 
 /// Parse an `otpauth://totp/...` URI into a `(title, TotpSecret)`
 ///
-/// ## Returns
+/// # Returns
 /// - `title`: recommended entry title for `VaultEntry::new_totp`
-/// - `secret`: `TotpSecret` with strict parameters
+/// - `secret`: validated `TotpSecret`
 ///
 /// # Security
-/// Denied in decoy policy
+/// Denied by the centralized session/runtime policy
 pub fn parse_totp_otpauth_uri(
     policy: PolicyContext,
     uri: &str,
 ) -> Result<(String, TotpSecret), OtpAuthError> {
-    if policy.is_decoy() {
+    if !policy.allow_otpauth_import() {
         return Err(OtpAuthError::InvalidParams);
     }
 
@@ -120,7 +120,6 @@ pub fn parse_totp_otpauth_uri(
     let issuer_final = issuer_param.or(issuer_from_label);
 
     // Validate title/account/issuer using existing validators (bidi/zero-width/control)
-    //
     // Also apply a basic "script mixing" rule to reduce common homograph tricks
     validate_title(&title).map_err(map_entry_error)?;
     reject_script_mixing(&title).map_err(map_entry_error)?;
@@ -180,7 +179,7 @@ fn split_label(label: &str) -> (Option<String>, Option<String>, String) {
 /// Reject gross homograph-style script mixing
 ///
 /// # Security
-/// Most common spoofing pattern targeted (ASCII mixed with Cyrillic/Greek letters)
+/// Most common spoofing pattern targeted (ASCII mixed with Cyrillic/Greek letters) \
 /// It does not attempt full Unicode confusable detection
 fn reject_script_mixing(s: &str) -> Result<(), EntryError> {
     let mut has_ascii_alnum = false;

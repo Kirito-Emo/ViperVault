@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
 use crate::vault::VaultPayload;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
@@ -29,6 +30,8 @@ pub enum VaultState {
 /// - Auto-lock timer wipes decrypted memory
 /// - All state transitions go through this type
 /// - Activity can reset the timer via `notify_activity()`
+/// - Each unlock or manual lock advances a generation counter so stale tasks
+///   from prior cycles cannot affect the current session
 ///
 /// # Design note
 /// Intentionally rotate the `Notify` instance whenever the auto-lock task is restarted
@@ -44,6 +47,14 @@ pub struct VaultLockManager {
     notify: StdMutex<Arc<Notify>>,
 
     auto_lock_task: Mutex<Option<JoinHandle<()>>>,
+
+    /// Monotonic generation identifier for session and timer cycles
+    ///
+    /// # Security
+    /// A stale task may still exist transiently even after `abort()` is requested \
+    /// The generation value prevents such tasks from locking or extending a newer
+    /// session if they ever resume execution
+    generation: Arc<AtomicU64>,
 }
 
 impl VaultLockManager {
@@ -53,7 +64,16 @@ impl VaultLockManager {
             state: Arc::new(Mutex::new(VaultState::Locked)),
             notify: StdMutex::new(Arc::new(Notify::new())),
             auto_lock_task: Mutex::new(None),
+            generation: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    /// Advance the generation and return the freshly published value
+    ///
+    /// # Security
+    /// Each new unlock or manual lock invalidates all previously spawned timer cycles
+    fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// Unlocks the vault by storing decrypted plaintext JSON bytes in memory
@@ -62,7 +82,10 @@ impl VaultLockManager {
     /// # Security
     /// - Any previously unlocked state is dropped (wiped)
     /// - Timer resets on unlock
+    /// - A fresh generation invalidates stale timer tasks from prior cycles
     pub async fn unlock_with_plaintext_json(&self, plaintext_json: Vec<u8>, timeout: Duration) {
+        let generation = self.next_generation();
+
         {
             let mut state = self.state.lock().await;
             *state = VaultState::Unlocked {
@@ -70,7 +93,7 @@ impl VaultLockManager {
             };
         }
 
-        self.restart_auto_lock(timeout).await;
+        self.restart_auto_lock(timeout, generation).await;
     }
 
     /// Returns the decrypted payload if unlocked
@@ -91,11 +114,18 @@ impl VaultLockManager {
     }
 
     /// Forces immediate lock and wipes decrypted memory
+    ///
+    /// # Security
+    /// Advancing the generation before cancellation ensures any stale background
+    /// timer that might still resume cannot affect a future unlock cycle
     pub async fn lock(&self) {
+        let _generation = self.next_generation();
+
         {
             let mut state = self.state.lock().await;
             *state = VaultState::Locked;
         }
+
         self.cancel_auto_lock().await;
     }
 
@@ -120,11 +150,16 @@ impl VaultLockManager {
 
     /// Starts or restarts the auto-lock background task
     ///
+    /// # Parameters
+    /// - `timeout`: quiet period after which the vault must lock
+    /// - `generation`: current session generation captured at unlock time
+    ///
     /// # Security
-    /// Uses a deadline-based timer (`sleep_until`) and rotates the `Notify`
-    /// instance to ensure deterministic behavior and to prevent stale signals
-    /// from resetting a fresh timer
-    async fn restart_auto_lock(&self, timeout: Duration) {
+    /// Uses a deadline-based timer (`sleep_until`), rotates the `Notify`
+    /// instance to ensure deterministic behavior and checks the captured generation
+    /// before applying any state transition. This prevents stale tasks from prior cycles
+    /// from locking a newer session
+    async fn restart_auto_lock(&self, timeout: Duration, generation: u64) {
         self.cancel_auto_lock().await;
 
         // Create a brand-new Notify for this auto-lock cycle and publish it
@@ -138,6 +173,7 @@ impl VaultLockManager {
         }
 
         let state = Arc::clone(&self.state);
+        let generation_ref = Arc::clone(&self.generation);
 
         let task: JoinHandle<()> = tokio::spawn(async move {
             let mut deadline = Instant::now() + timeout;
@@ -146,10 +182,18 @@ impl VaultLockManager {
                 tokio::select! {
                     _ = sleep_until(deadline) => {
                         let mut st = state.lock().await;
-                        *st = VaultState::Locked;
+
+                        if generation_ref.load(Ordering::SeqCst) == generation {
+                            *st = VaultState::Locked;
+                        }
+
                         break;
                     }
                     _ = cycle_notify.notified() => {
+                        if generation_ref.load(Ordering::SeqCst) != generation {
+                            break;
+                        }
+
                         // Activity observed: push the deadline forward
                         deadline = Instant::now() + timeout;
                     }
@@ -201,7 +245,7 @@ impl VaultLockManager {
                     serde_json::from_slice(&plaintext_json[..]).ok()?;
                 Some(f(&payload))
             }
-            _ => None,
+            VaultState::Locked => None,
         }
     }
 }

@@ -4,19 +4,20 @@
 //! Import E2E flows
 //!
 //! # Purpose
-//! Provide a safe high-level flow so the UI/FFI layer does not skip critical steps (policy gates, decrypt verification, unlock)
+//! Provide a safe high-level flow so the UI or FFI layer does not skip critical
+//! steps such as policy gates, decrypt verification and unlock
 //!
 //! # Security
 //! - Denied in decoy mode
 //! - Denied under anti-debug soft policy
-//! - Does not distinguish wrong password vs tampering (AuthFailed)
+//! - Does not distinguish wrong password vs tampering (`AuthFailed`)
 
 use super::ImportError;
 use super::signed::import_vipervault_from_signed_backup;
+use crate::core::VaultLockManager;
 use crate::core::auth_gate::AuthGate;
 use crate::core::policy::PolicyContext;
 use crate::core::unlock::unlock_session_gated;
-use crate::core::{VaultLockManager, allow_clipboard_under_soft_policy};
 use crate::memory::MasterPassword;
 use std::time::Duration;
 
@@ -28,7 +29,8 @@ use std::time::Duration;
 ///
 /// # Security
 /// - Does not leak wrong password vs tampering
-/// - Runs password-based unlock under [`AuthGate`] (throttling + spawn_blocking)
+/// - Runs password-based unlock under [`AuthGate`]
+/// - Denied by the centralized session/runtime policy
 pub async fn import_signed_vault_and_unlock(
     policy: PolicyContext,
     gate: &AuthGate,
@@ -37,11 +39,7 @@ pub async fn import_signed_vault_and_unlock(
     signed_backup_bytes: &[u8],
     timeout: Duration,
 ) -> Result<(), ImportError> {
-    if policy.is_decoy() {
-        return Err(ImportError::PolicyDenied);
-    }
-
-    if !allow_clipboard_under_soft_policy() {
+    if !policy.allow_signed_backup_transfer() {
         return Err(ImportError::PolicyDenied);
     }
 

@@ -5,7 +5,7 @@
 //!
 //! # Scope
 //! These tests validate the plaintext interop quarantine and commit flow:
-//! - valid otpauth import to quarantine
+//! - valid OTPAuth import to quarantine
 //! - decoy policy denial
 //! - unsupported format rejection
 //! - malformed URI rejection
@@ -14,13 +14,13 @@
 //! - anti-DoS limits and invariant enforcement
 //!
 //! # Security
-//! Interop import is the highest-risk parsing boundary because it accepts
-//! plaintext, non-owned provider formats. These tests ensure that:
+//! Interop import is a high-risk parsing boundary because it accepts plaintext third-party formats \
+//! These tests ensure that:
 //! - policy gates are enforced
 //! - malformed or oversized input is rejected
 //! - duplicates are skipped deterministically
 //! - only valid TOTP entries survive quarantine
-//! - commit re-validates invariants and respects size limits
+//! - commit re-validates size expectations
 
 use vipervault_core::core::policy::PolicyContext;
 use vipervault_core::entries::{EntryType, VaultEntry};
@@ -45,7 +45,7 @@ fn interop_bytes() -> &'static [u8] {
 "#
 }
 
-/// A minimal valid TOTP otpauth URI list must parse into quarantine
+/// A minimal valid TOTP OTPAuth URI list must parse into quarantine
 #[test]
 fn interop_quarantine_valid_otpauth_list() {
     let q = import_interop_quarantine(
@@ -103,7 +103,7 @@ fn interop_quarantine_rejects_invalid_uri() {
     assert!(matches!(err, ImportError::InvalidFormat));
 }
 
-/// Duplicate otpauth entries must be skipped deterministically
+/// Duplicate OTPAuth entries must be skipped deterministically
 ///
 /// # Security
 /// Deduplication is hash-based on issuer/account/secret and must avoid

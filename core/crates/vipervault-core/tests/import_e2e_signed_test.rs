@@ -4,9 +4,9 @@
 //! Signed import E2E tests
 //!
 //! # Scope
-//! These tests validate the high-level signed import + unlock flow:
+//! These tests validate the high-level signed import and unlock flow:
 //! - successful import and manager unlock
-//! - decoy policy denial
+//! - policy denial in decoy mode
 //! - wrong password coarse-grained rejection
 //! - tamper coarse-grained rejection
 //! - resulting manager usability after successful import

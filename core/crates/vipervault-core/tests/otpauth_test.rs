@@ -16,12 +16,11 @@
 //! # Security
 //! OTPAuth parsing is an untrusted import boundary. These tests ensure that:
 //! - malformed URIs are rejected safely
-//! - dangerous Unicode/script-mixing inputs are rejected
+//! - dangerous Unicode or script-mixing inputs are rejected
 //! - exported URIs preserve valid TOTP semantics
 //! - decoy mode denies parsing at the policy boundary
 
-use secrecy::ExposeSecret;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use vipervault_core::core::policy::PolicyContext;
 use vipervault_core::entries::types::{TotpAlgorithm, TotpSecret};
 use vipervault_core::otpauth::error::OtpAuthError;
@@ -37,7 +36,7 @@ fn decoy_policy() -> PolicyContext {
     PolicyContext::new(UnlockOutcome::Decoy)
 }
 
-/// A valid otpauth URI must parse successfully
+/// A valid OTPAuth URI must parse successfully
 #[test]
 fn parse_valid_otpauth_uri_success() {
     let uri = "otpauth://totp/GitHub:octocat?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA1&digits=6&period=30";
@@ -160,7 +159,7 @@ fn parse_otpauth_rejects_oversized_uri() {
     assert!(matches!(err, OtpAuthError::InvalidUri));
 }
 
-/// A valid TOTP secret must export into a valid otpauth URI
+/// A valid TOTP secret must export into a valid OTPAuth URI
 #[test]
 fn export_valid_totp_secret_success() {
     let totp = TotpSecret {

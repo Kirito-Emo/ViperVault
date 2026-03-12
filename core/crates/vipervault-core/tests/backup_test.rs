@@ -146,35 +146,24 @@ fn signed_backup_unsupported_version_is_rejected() {
 fn signed_backup_truncated_container_is_rejected() {
     let policy = PolicyContext::new(UnlockOutcome::Primary);
     let password = MasterPassword::new("pw".to_string());
-    let vault_bytes = b"vault".to_vec();
 
     let mut encoded =
-        encode_signed_backup(policy, &password, &vault_bytes, backup_kdf()).expect("encode backup");
-
-    encoded.truncate(encoded.len() / 2);
+        encode_signed_backup(policy, &password, b"vault", backup_kdf()).expect("encode backup");
+    encoded.truncate(encoded.len() - 3);
 
     let err = decode_signed_backup(policy, &password, &encoded).unwrap_err();
-    assert!(matches!(
-        err,
-        BackupError::InvalidFormat
-            | BackupError::Deserialize
-            | BackupError::UnsupportedVersion
-            | BackupError::PayloadTooLarge
-    ));
+    assert!(matches!(err, BackupError::InvalidFormat));
 }
 
-/// Signature length different from 64 bytes must be rejected
+/// Trailing garbage must be rejected safely
 #[test]
-fn signed_backup_invalid_signature_length_is_rejected() {
+fn signed_backup_trailing_bytes_are_rejected() {
     let policy = PolicyContext::new(UnlockOutcome::Primary);
     let password = MasterPassword::new("pw".to_string());
-    let vault_bytes = b"vault".to_vec();
 
     let mut encoded =
-        encode_signed_backup(policy, &password, &vault_bytes, backup_kdf()).expect("encode backup");
-
-    let sig_len_off = encoded.len() - 64 - 2;
-    encoded[sig_len_off..sig_len_off + 2].copy_from_slice(&63u16.to_le_bytes());
+        encode_signed_backup(policy, &password, b"vault", backup_kdf()).expect("encode backup");
+    encoded.extend_from_slice(b"garbage");
 
     let err = decode_signed_backup(policy, &password, &encoded).unwrap_err();
     assert!(matches!(err, BackupError::InvalidFormat));

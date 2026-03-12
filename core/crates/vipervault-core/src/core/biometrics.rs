@@ -24,7 +24,7 @@ impl VaultLockManager {
     /// # Security
     /// - Only supports non-duress encrypted vaults
     /// - Uses `header_bytes` as AAD to prevent header tampering
-    /// - Denied under soft-policy debugger detection
+    /// - Denied by the centralized session/runtime policy
     pub async fn unlock_with_master_key(
         &self,
         policy: PolicyContext,
@@ -32,11 +32,7 @@ impl VaultLockManager {
         master_key: &KeyMaterial,
         timeout: Duration,
     ) -> Result<(), BiometricError> {
-        if policy.is_decoy() {
-            return Err(BiometricError::PolicyDenied);
-        }
-
-        if !crate::core::allow_clipboard_under_soft_policy() {
+        if !policy.allow_biometric_unlock() {
             return Err(BiometricError::PolicyDenied);
         }
 
@@ -48,8 +44,7 @@ impl VaultLockManager {
     /// High-level biometric unlock
     ///
     /// # Security
-    /// - Denied in decoy policy
-    /// - Denied under soft-policy debugger detection
+    /// - Denied by the centralized session/runtime policy
     /// - Not supported for duress-enabled vaults
     pub async fn unlock_with_biometrics(
         &self,
@@ -59,11 +54,7 @@ impl VaultLockManager {
         vault_id: &[u8],
         timeout: Duration,
     ) -> Result<(), BiometricError> {
-        if policy.is_decoy() {
-            return Err(BiometricError::PolicyDenied);
-        }
-
-        if !crate::core::allow_clipboard_under_soft_policy() {
+        if !policy.allow_biometric_unlock() {
             return Err(BiometricError::PolicyDenied);
         }
 
