@@ -155,7 +155,10 @@ fn main() {
     // -------------------------------------------------------------------------
 
     let valid_vault = generate_valid_vault_bytes();
-    write_file_if_missing(&decode_vault_dir.join("valid_encrypted_vault.bin"), &valid_vault);
+    write_file_if_missing(
+        &decode_vault_dir.join("valid_encrypted_vault.bin"),
+        &valid_vault,
+    );
 
     let mut truncated_vault = valid_vault.clone();
     truncated_vault.truncate(truncated_vault.len().saturating_sub(8));
@@ -358,19 +361,7 @@ fn main() {
         b"\x01\x00\x02\x03\x04\x05\x06\x07",
     );
 
-    write_seed_bytes(
-        &duress_struct_dir,
-        "minimal_4b.bin",
-        b"\x00\x00\x00\x00",
-    );
-    write_seed_bytes(
-        &duress_struct_dir,
-        "variant_4b.bin",
-        b"\x01\x01\x01\x01",
-    );
-    write_seed_bytes(
-        &duress_struct_dir,
-        "mixed_4b.bin",
-        b"\x02\x03\x04\x05",
-    );
+    write_seed_bytes(&duress_struct_dir, "minimal_4b.bin", b"\x00\x00\x00\x00");
+    write_seed_bytes(&duress_struct_dir, "variant_4b.bin", b"\x01\x01\x01\x01");
+    write_seed_bytes(&duress_struct_dir, "mixed_4b.bin", b"\x02\x03\x04\x05");
 }

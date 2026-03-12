@@ -1,5 +1,4 @@
 #![no_main]
-
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Emanuele Relmi
 
@@ -61,10 +60,7 @@ struct StructuredOtpRoundtripCase {
 /// # Notes
 /// The issuer is expected to be preserved exactly when present and to remain
 /// absent when not provided
-fn assert_issuer_roundtrip(
-    expected_issuer: Option<&str>,
-    parsed: &TotpSecret,
-) {
+fn assert_issuer_roundtrip(expected_issuer: Option<&str>, parsed: &TotpSecret) {
     match expected_issuer {
         Some(expected) => {
             let actual = parsed
