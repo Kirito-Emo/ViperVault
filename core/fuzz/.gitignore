@@ -1,0 +1,7 @@
+target/
+artifacts/
+coverage/
+logs/
+corpus/
+corpus_seed/
+Cargo.lock

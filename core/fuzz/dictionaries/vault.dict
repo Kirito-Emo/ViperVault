@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2025 Emanuele Relmi
+
+# Vault/container-oriented tokens
+"crypto"
+"aead"
+"XChaCha20Poly1305"
+"Argon2id"
+"salt"
+"nonce"
+"duress"
+"primary"
+"decoy"
+"schema_version"
+"vault_id"
+"Encrypted"
+"PlaintextJson"
+"ciphertext"
+"json"
+"mem_kib"
+"time_cost"
+"lanes"
+
+# Common JSON punctuation and fragments
+"{"
+"}"
+"["
+"]"
+":"
+","
+"\"crypto\""
+"\"aead\""
+"\"duress\""
+"\"primary\""
+"\"decoy\""
+"\"salt\""
+"\"nonce\""
+
+# Useful little-endian numeric fragments often compared in parsers/codecs
+"\x00\x00\x00\x00"
+"\x01\x00"
+"\x01\x00\x00\x00"
+"\x07\x00"
+"\x10\x00"
+"\x1e\x00"
+"\x3c\x00"
+"\x78\x00"
+"\xff\xff"
+"\xff\xff\xff\xff"
+
+# Fuzzer-discovered / high-value substrings seen during prior runs
+" a"
+"noncd"
+"!eaypto"

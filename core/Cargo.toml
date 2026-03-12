@@ -6,7 +6,7 @@ members = [
     "crates/vipervault-core",
     "crates/vipervault-app",
 ]
-resolver = "2"
+resolver = "3"
 
 [profile.dev]
 opt-level = 0               # No optimization
@@ -15,7 +15,7 @@ split-debuginfo = '...'     # Platform-specific
 debug-assertions = true     # Enable debug assertions
 overflow-checks = true      # Enable overflow checks
 lto = false                 # Disable Link Time Optimization
-panic = 'unwind'            # Set panic strategy to unwind
+panic = "unwind"            # Set panic strategy to unwind
 incremental = true          # Enable incremental compilation
 codegen-units = 256         # Codegen units for faster compilation
 rpath = false               # Disable rpath

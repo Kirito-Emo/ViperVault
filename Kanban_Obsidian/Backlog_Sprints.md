@@ -29,7 +29,7 @@ kanban-plugin: board
 - [x] [[Integration tests for CRUD + auto-lock]]
 - [x] [[Stress test on file locking and race conditions]]
 - [x] [[Security tests (MFA, duress, backup)]]
-- [ ] [[Fuzzing for vault parsing serialization]]
+- [x] [[Fuzzing for vault parsing serialization]]
 
 
 ## Done

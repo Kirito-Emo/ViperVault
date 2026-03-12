@@ -1,0 +1,82 @@
+[package]
+name = "vipervault-core-fuzz"
+version = "0.1.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+secrecy = "0.10.3"
+uuid = "1.22.0"
+
+[dependencies.vipervault-core]
+path = "../crates/vipervault-core"
+
+[[bin]]
+name = "decode_vault_file"
+path = "fuzz_targets/decode_vault_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_totp_otpauth_uri"
+path = "fuzz_targets/parse_totp_otpauth_uri.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_base32_secret_strict"
+path = "fuzz_targets/decode_base32_secret_strict.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_signed_backup"
+path = "fuzz_targets/decode_signed_backup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_interop_quarantine"
+path = "fuzz_targets/import_interop_quarantine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonicalize_base32_for_export"
+path = "fuzz_targets/canonicalize_base32_for_export.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vault_codec_roundtrip"
+path = "fuzz_targets/vault_codec_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "enable_duress_on_vault"
+path = "fuzz_targets/enable_duress_on_vault.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "otpauth_roundtrip"
+path = "fuzz_targets/otpauth_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

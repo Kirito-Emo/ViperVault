@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2025 Emanuele Relmi
+
+# OTPAuth/TOTP-oriented tokens
+"otpauth://"
+"otpauth://totp/"
+"secret="
+"issuer="
+"algorithm="
+"digits="
+"period="
+
+# Supported algorithms
+"SHA1"
+"SHA256"
+"SHA512"
+
+# Common numeric values
+"6"
+"7"
+"8"
+"10"
+"30"
+"45"
+"60"
+"90"
+"120"
+
+# Label / query syntax
+":"
+"%3A"
+"?"
+"&"
+"="
+"/"
+
+# Representative issuers / accounts
+"GitHub"
+"Email"
+"Vault"
+"Forum"
+"octocat"
+"alice@example.com"
+"bob@example.com"
+"charlie@example.com"
+
+# Valid high-value Base32 secrets
+"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ===="
+"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+"MFRGGZDFMZTWQ2LKNNWG23TPO5XXE3DE"
+"ON2XEZLEON2XEZLEON2XEZLEON2XEZLE"
+
+# Common malformed / partial tokens useful for parser edge exploration
+"secret"
+"issuer"
+"algorithm"
+"digits"
+"period"
+"hotp"
+"https://"
+"otpauth://hotp/"
