@@ -1,5 +1,4 @@
 #![no_main]
-
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
@@ -62,7 +61,11 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let mode_selector = data.first().copied().unwrap_or(0) & 0x01;
-    let payload = if data.len() > 64 { &data[64..] } else { &[][..] };
+    let payload = if data.len() > 64 {
+        &data[64..]
+    } else {
+        &[][..]
+    };
 
     let storage = if mode_selector == 0 {
         VaultStorage::Encrypted {

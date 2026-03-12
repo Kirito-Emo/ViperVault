@@ -8,7 +8,8 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = "0.4.12"
 secrecy = "0.10.3"
 uuid = "1.22.0"
 
@@ -74,6 +75,34 @@ bench = false
 [[bin]]
 name = "otpauth_roundtrip"
 path = "fuzz_targets/otpauth_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_totp_otpauth_uri_structured"
+path = "fuzz_targets/parse_totp_otpauth_uri_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "otpauth_roundtrip_structured"
+path = "fuzz_targets/otpauth_roundtrip_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vault_codec_roundtrip_structured"
+path = "fuzz_targets/vault_codec_roundtrip_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "enable_duress_on_vault_structured"
+path = "fuzz_targets/enable_duress_on_vault_structured.rs"
 test = false
 doc = false
 bench = false

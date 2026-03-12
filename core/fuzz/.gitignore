@@ -4,3 +4,4 @@ coverage/
 logs/
 corpus/
 Cargo.lock
+/corpus_min/

@@ -23,6 +23,10 @@ targets=(
   vault_codec_roundtrip
   enable_duress_on_vault
   otpauth_roundtrip
+  parse_totp_otpauth_uri_structured
+  otpauth_roundtrip_structured
+  vault_codec_roundtrip_structured
+  enable_duress_on_vault_structured
 )
 
 default_fuzz_seconds=10
@@ -58,10 +62,10 @@ dictionary_for_target() {
   local target="$1"
 
   case "${target}" in
-    decode_vault_file|decode_signed_backup|vault_codec_roundtrip|enable_duress_on_vault)
+    decode_vault_file|decode_signed_backup|vault_codec_roundtrip|enable_duress_on_vault|vault_codec_roundtrip_structured|enable_duress_on_vault_structured)
       echo "${ROOT_DIR}/dictionaries/vault.dict"
       ;;
-    parse_totp_otpauth_uri|import_interop_quarantine|otpauth_roundtrip)
+    parse_totp_otpauth_uri|import_interop_quarantine|otpauth_roundtrip|parse_totp_otpauth_uri_structured|otpauth_roundtrip_structured)
       echo "${ROOT_DIR}/dictionaries/otpauth.dict"
       ;;
     *)
@@ -270,11 +274,11 @@ min_all() {
 summary() {
   echo
   echo "================================== FUZZ SUMMARY =================================="
-  printf "%-32s %-12s %-12s %-10s %-10s %-10s %-10s\n" \
+  printf "%-36s %-12s %-12s %-10s %-10s %-10s %-10s\n" \
     "Target" "Run" "Min" "Artifacts" "Before" "After" "Reduction"
 
   for target in "${targets[@]}"; do
-    printf "%-32s %-12s %-12s %-10s %-10s %-10s %-10s\n" \
+    printf "%-36s %-12s %-12s %-10s %-10s %-10s %-10s\n" \
       "${target}" \
       "${run_results[$target]:-SKIPPED}" \
       "${min_results[$target]:-SKIPPED}" \

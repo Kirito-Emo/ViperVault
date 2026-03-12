@@ -1,5 +1,4 @@
 #![no_main]
-
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
@@ -109,7 +108,10 @@ fuzz_target!(|data: &[u8]| {
             .expose_secret(),
         account
     );
-    assert_eq!(reparsed.secret_b32.expose_secret(), "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+    assert_eq!(
+        reparsed.secret_b32.expose_secret(),
+        "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    );
     assert_eq!(reparsed.digits, digits);
     assert_eq!(reparsed.period_secs, period_secs);
     assert_eq!(reparsed.algorithm, algorithm);

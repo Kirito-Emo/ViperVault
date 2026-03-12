@@ -47,8 +47,15 @@ fn backup_kdf_policy() -> BackupKdfPolicy {
     }
 }
 
-/// Write bytes to a file, creating parent directories if necessary
-fn write_file(path: &Path, bytes: &[u8]) {
+/// Write bytes to a file only if it does not already exist
+///
+/// # Notes
+/// Existing curated seeds must never be overwritten by the generator
+fn write_file_if_missing(path: &Path, bytes: &[u8]) {
+    if path.exists() {
+        return;
+    }
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create parent directories");
     }
@@ -103,6 +110,11 @@ fn corpus_seed_root() -> PathBuf {
     PathBuf::from("corpus_seed")
 }
 
+/// Write a binary seed from a fixed byte slice
+fn write_seed_bytes(dir: &Path, name: &str, bytes: &[u8]) {
+    write_file_if_missing(&dir.join(name), bytes);
+}
+
 fn main() {
     let corpus_root = corpus_seed_root();
 
@@ -115,6 +127,10 @@ fn main() {
     let vault_roundtrip_dir = corpus_root.join("vault_codec_roundtrip");
     let duress_dir = corpus_root.join("enable_duress_on_vault");
     let otpauth_roundtrip_dir = corpus_root.join("otpauth_roundtrip");
+    let parse_otpauth_struct_dir = corpus_root.join("parse_totp_otpauth_uri_structured");
+    let otpauth_roundtrip_struct_dir = corpus_root.join("otpauth_roundtrip_structured");
+    let vault_roundtrip_struct_dir = corpus_root.join("vault_codec_roundtrip_structured");
+    let duress_struct_dir = corpus_root.join("enable_duress_on_vault_structured");
 
     for dir in [
         &decode_vault_dir,
@@ -126,6 +142,10 @@ fn main() {
         &vault_roundtrip_dir,
         &duress_dir,
         &otpauth_roundtrip_dir,
+        &parse_otpauth_struct_dir,
+        &otpauth_roundtrip_struct_dir,
+        &vault_roundtrip_struct_dir,
+        &duress_struct_dir,
     ] {
         fs::create_dir_all(dir).expect("create corpus dir");
     }
@@ -135,50 +155,50 @@ fn main() {
     // -------------------------------------------------------------------------
 
     let valid_vault = generate_valid_vault_bytes();
-    write_file(&decode_vault_dir.join("valid_encrypted_vault.bin"), &valid_vault);
+    write_file_if_missing(&decode_vault_dir.join("valid_encrypted_vault.bin"), &valid_vault);
 
     let mut truncated_vault = valid_vault.clone();
     truncated_vault.truncate(truncated_vault.len().saturating_sub(8));
-    write_file(
+    write_file_if_missing(
         &decode_vault_dir.join("truncated_encrypted_vault.bin"),
         &truncated_vault,
     );
 
     let mut trailing_vault = valid_vault.clone();
     trailing_vault.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
-    write_file(
+    write_file_if_missing(
         &decode_vault_dir.join("trailing_bytes_encrypted_vault.bin"),
         &trailing_vault,
     );
 
-    write_file(&decode_vault_dir.join("empty.bin"), b"");
-    write_file(&decode_vault_dir.join("magic_only.bin"), b"VLT1");
+    write_file_if_missing(&decode_vault_dir.join("empty.txt"), b"");
+    write_file_if_missing(&decode_vault_dir.join("magic_only.txt"), b"VLT1");
 
     // -------------------------------------------------------------------------
     // parse_totp_otpauth_uri corpus seeds
     // -------------------------------------------------------------------------
 
-    write_file(
+    write_file_if_missing(
         &parse_otpauth_dir.join("valid_sha1.txt"),
         b"otpauth://totp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=GitHub&algorithm=SHA1&digits=6&period=30",
     );
 
-    write_file(
+    write_file_if_missing(
         &parse_otpauth_dir.join("valid_sha256.txt"),
         b"otpauth://totp/Email:alice@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Email&algorithm=SHA256&digits=8&period=60",
     );
 
-    write_file(
+    write_file_if_missing(
         &parse_otpauth_dir.join("missing_secret.txt"),
         b"otpauth://totp/GitHub:octocat?issuer=GitHub&algorithm=SHA1&digits=6&period=30",
     );
 
-    write_file(
+    write_file_if_missing(
         &parse_otpauth_dir.join("wrong_scheme.txt"),
         b"https://totp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
     );
 
-    write_file(
+    write_file_if_missing(
         &parse_otpauth_dir.join("wrong_host.txt"),
         b"otpauth://hotp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
     );
@@ -187,19 +207,25 @@ fn main() {
     // decode_base32_secret_strict corpus seeds
     // -------------------------------------------------------------------------
 
-    write_file(
+    write_file_if_missing(
         &decode_base32_dir.join("valid_unpadded.txt"),
         b"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
     );
 
-    write_file(
+    write_file_if_missing(
         &decode_base32_dir.join("valid_padded.txt"),
         b"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ====",
     );
 
-    write_file(&decode_base32_dir.join("too_short.txt"), b"JBSWY3DPEHPK3PXP");
-    write_file(&decode_base32_dir.join("invalid_chars.txt"), b"NOT_VALID_BASE32!");
-    write_file(
+    write_file_if_missing(
+        &decode_base32_dir.join("too_short.txt"),
+        b"JBSWY3DPEHPK3PXP",
+    );
+    write_file_if_missing(
+        &decode_base32_dir.join("invalid_chars.txt"),
+        b"NOT_VALID_BASE32!",
+    );
+    write_file_if_missing(
         &decode_base32_dir.join("invalid_internal_padding.txt"),
         b"ABCD=EFGH",
     );
@@ -209,14 +235,14 @@ fn main() {
     // -------------------------------------------------------------------------
 
     let valid_backup = generate_valid_signed_backup_bytes();
-    write_file(
+    write_file_if_missing(
         &decode_backup_dir.join("valid_signed_backup.bin"),
         &valid_backup,
     );
 
     let mut truncated_backup = valid_backup.clone();
     truncated_backup.truncate(truncated_backup.len().saturating_sub(12));
-    write_file(
+    write_file_if_missing(
         &decode_backup_dir.join("truncated_signed_backup.bin"),
         &truncated_backup,
     );
@@ -225,42 +251,126 @@ fn main() {
     if let Some(last) = tampered_backup.last_mut() {
         *last ^= 0x01;
     }
-    write_file(
+    write_file_if_missing(
         &decode_backup_dir.join("tampered_signed_backup.bin"),
         &tampered_backup,
     );
 
-    write_file(&decode_backup_dir.join("empty.bin"), b"");
-    write_file(&decode_backup_dir.join("magic_only.bin"), b"VVBAKUP1");
+    write_file_if_missing(&decode_backup_dir.join("empty.txt"), b"");
+    write_file_if_missing(&decode_backup_dir.join("magic_only.txt"), b"VVBAKUP1");
 
     // -------------------------------------------------------------------------
-    // Additional fuzz target seed corpora
+    // Additional byte-level fuzz target seeds
     // -------------------------------------------------------------------------
 
-    write_file(
+    write_file_if_missing(
         &interop_dir.join("valid_list.txt"),
         b"otpauth://totp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=GitHub&algorithm=SHA1&digits=6&period=30\n\
           otpauth://totp/Email:alice@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Email&algorithm=SHA256&digits=8&period=60\n",
     );
 
-    write_file(
+    write_file_if_missing(
         &canonicalize_dir.join("valid_spaced.txt"),
         b"GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ",
     );
-    write_file(
+    write_file_if_missing(
         &canonicalize_dir.join("valid_hyphenated.txt"),
         b"GEZD-GNBV-GY3T-QOJQ-GEZD-GNBV-GY3T-QOJQ",
     );
-    write_file(&canonicalize_dir.join("invalid.txt"), b"invalid!!");
+    write_file_if_missing(&canonicalize_dir.join("invalid.txt"), b"invalid!!");
 
-    write_file(&vault_roundtrip_dir.join("small.bin"), b"\x01\x00seed");
-    write_file(&vault_roundtrip_dir.join("empty.bin"), b"");
-    write_file(&vault_roundtrip_dir.join("random.bin"), b"abc123xyz987");
+    write_file_if_missing(&vault_roundtrip_dir.join("small.bin"), b"\x01\x00seed");
+    write_file_if_missing(&vault_roundtrip_dir.join("empty.txt"), b"");
+    write_file_if_missing(&vault_roundtrip_dir.join("random.txt"), b"abc123xyz987");
 
-    write_file(&duress_dir.join("empty.bin"), b"");
-    write_file(&duress_dir.join("small.bin"), b"duress-seed");
-    write_file(&duress_dir.join("random.bin"), b"\x00\x01\x02\x03migration\xff");
+    write_file_if_missing(&duress_dir.join("empty.txt"), b"");
+    write_file_if_missing(&duress_dir.join("small.txt"), b"duress-seed");
+    write_file_if_missing(
+        &duress_dir.join("random.bin"),
+        b"\x00\x01\x02\x03migration\xff",
+    );
 
-    write_file(&otpauth_roundtrip_dir.join("title_seed.txt"), b"GitHub");
-    write_file(&otpauth_roundtrip_dir.join("mixed_seed.txt"), b"Vault_Prod-01");
+    write_file_if_missing(&otpauth_roundtrip_dir.join("title_seed.txt"), b"GitHub");
+    write_file_if_missing(
+        &otpauth_roundtrip_dir.join("mixed_seed.txt"),
+        b"Vault_Prod-01",
+    );
+
+    // -------------------------------------------------------------------------
+    // Structure-aware fuzz target seeds
+    // -------------------------------------------------------------------------
+
+    write_seed_bytes(
+        &parse_otpauth_struct_dir,
+        "minimal_8b.bin",
+        b"\x00\x00\x00\x00\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &parse_otpauth_struct_dir,
+        "variant_8b.bin",
+        b"\x01\x01\x01\x01\x01\x01\x01\x01",
+    );
+    write_seed_bytes(
+        &parse_otpauth_struct_dir,
+        "mixed_8b.bin",
+        b"\x02\x00\x03\x00\x04\x00\x05\x00",
+    );
+
+    write_seed_bytes(
+        &otpauth_roundtrip_struct_dir,
+        "minimal_8b.bin",
+        b"\x00\x00\x00\x00\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &otpauth_roundtrip_struct_dir,
+        "with_issuer_8b.bin",
+        b"\x01\x01\x00\x00\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &otpauth_roundtrip_struct_dir,
+        "with_account_8b.bin",
+        b"\x00\x01\x01\x00\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &otpauth_roundtrip_struct_dir,
+        "mixed_8b.bin",
+        b"\x03\x00\x11\x00\x3b\xd8\x35\x3b",
+    );
+
+    write_seed_bytes(
+        &vault_roundtrip_struct_dir,
+        "minimal_8b.bin",
+        b"\x00\x00\x00\x00\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &vault_roundtrip_struct_dir,
+        "plaintext_8b.bin",
+        b"\x00\x01\x00\x00\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &vault_roundtrip_struct_dir,
+        "encrypted_payload_8b.bin",
+        b"\x00\x00\x01\x02\x03\x04\x05\x06",
+    );
+    write_seed_bytes(
+        &vault_roundtrip_struct_dir,
+        "variant_8b.bin",
+        b"\x01\x00\x02\x03\x04\x05\x06\x07",
+    );
+
+    write_seed_bytes(
+        &duress_struct_dir,
+        "minimal_4b.bin",
+        b"\x00\x00\x00\x00",
+    );
+    write_seed_bytes(
+        &duress_struct_dir,
+        "variant_4b.bin",
+        b"\x01\x01\x01\x01",
+    );
+    write_seed_bytes(
+        &duress_struct_dir,
+        "mixed_4b.bin",
+        b"\x02\x03\x04\x05",
+    );
 }
