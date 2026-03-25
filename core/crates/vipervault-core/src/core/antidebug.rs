@@ -1,203 +1,188 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-//! Anti-debugging detection (best-effort)
+//! Best-effort runtime inspection and anti-debug signals
 //!
 //! # Security
-//! This module provides mitigations, not guarantees \
-//! Under debugging, sensitive features are degraded through a soft policy
+//! This module does not provide a cryptographic or kernel-enforced security boundary \
+//! Instead, it offers best-effort runtime signals that higher-level
+//! policy code can use to degrade, deny or tighten sensitive operations
 //!
 //! # Design
-//! Platform-specific detection is intentionally separated from policy decisions \
-//! This allows deterministic testing of policy behavior without depending on the
-//! runtime host environment
+//! - Keep platform probing isolated from product policy decisions
+//! - Expose a conservative state model suitable for mobile-first hardening
+//! - Avoid treating ambiguous runtime states as fully trusted
+//!
+//! # Important limitation
+//! A determined attacker with device-level control may still bypass or tamper with these checks \
+//! This module must therefore be treated as a signal source, not as a complete defence
 
-use std::time::Duration;
-
-/// Maximum auto-lock timeout allowed under active debugging
+/// Best-effort runtime inspection state
 ///
 /// # Security
-/// A shorter timeout reduces the exposure window of decrypted state when a
-/// debugger is attached
-pub const DEBUG_MAX_TIMEOUT_SECS: u64 = 30;
-
-/// Debugging detection result
+/// This state is conservative:
+/// - [`Self::NotDebugged`] means no debugger/tamper signal was observed
+/// - [`Self::Debugged`] means an active debugger signal was observed
+/// - [`Self::Unknown`] means the runtime could not be classified confidently
+/// - [`Self::TamperSuspected`] is reserved for stronger integrity concerns and
+///   should be treated as the most restrictive state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DebugStatus {
-    /// No debugger has been detected
+#[non_exhaustive]
+pub enum RuntimeInspectionState {
+    /// No debugger or tamper signal has been detected
     NotDebugged,
+
     /// A debugger has been detected
     Debugged,
-    /// The runtime could not determine whether debugging is active
+
+    /// The runtime could not be classified with sufficient confidence
     Unknown,
+
+    /// A stronger integrity anomaly or tamper signal was observed
+    TamperSuspected,
 }
 
-/// Detect whether a debugger is attached (best-effort)
-pub fn detect_debugging() -> DebugStatus {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        detect_debugging_linux_proc()
+impl RuntimeInspectionState {
+    /// Return `true` when the runtime state should be treated as restrictive
+    ///
+    /// # Security
+    /// This helper classifies both [`Self::Unknown`] and [`Self::TamperSuspected`] as restrictive
+    pub fn is_restrictive(self) -> bool {
+        !matches!(self, Self::NotDebugged)
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        return detect_debugging_apple_sysctl();
+    /// Return `true` when a debugger was observed
+    pub fn is_debugged(self) -> bool {
+        matches!(self, Self::Debugged)
     }
 
-    #[cfg(windows)]
-    {
-        return detect_debugging_windows();
+    /// Return `true` when the runtime classification is ambiguous
+    pub fn is_unknown(self) -> bool {
+        matches!(self, Self::Unknown)
     }
 
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        windows
-    )))]
-    {
-        DebugStatus::Unknown
+    /// Return `true` when a stronger tamper signal was observed
+    pub fn is_tamper_suspected(self) -> bool {
+        matches!(self, Self::TamperSuspected)
     }
 }
 
-/// Evaluate whether clipboard operations are allowed for a given debug status
-///
-/// # Parameters
-/// - `status`: debug detection outcome used for policy evaluation
-///
-/// # Returns
-/// `true` when clipboard operations remain allowed under the soft policy
+/// Detect the current runtime inspection state
 ///
 /// # Security
-/// Clipboard access is denied only when active debugging is detected \
-/// The `Unknown` state remains permissive in order to avoid unnecessary
-/// operational denial on unsupported or partially observable platforms
-pub fn allow_clipboard_for_status(status: DebugStatus) -> bool {
-    !matches!(status, DebugStatus::Debugged)
+/// This function is best-effort. It should be used only as an
+/// input to higher-level policy, never as a standalone guarantee
+///
+/// # Platform behaviour
+/// - On supported Unix-like targets, debugger presence is checked through
+///   platform-specific probing
+/// - Unsupported or ambiguous outcomes degrade to [`RuntimeInspectionState::Unknown`]
+pub fn current_runtime_inspection_state() -> RuntimeInspectionState {
+    detect_runtime_inspection_state()
 }
 
-/// Whether clipboard operations are allowed under soft policy
-pub fn allow_clipboard_under_soft_policy() -> bool {
-    allow_clipboard_for_status(detect_debugging())
-}
-
-/// Evaluate whether plaintext export is allowed for a given debug status
-///
-/// # Parameters
-/// - `status`: debug detection outcome used for policy evaluation
-///
-/// # Returns
-/// `true` when plaintext export remains allowed under the soft policy
-///
-/// # Security
-/// Plaintext export dramatically lowers the cost of data exfiltration \
-/// Under active debugging, this operation is denied
-pub fn allow_export_for_status(status: DebugStatus) -> bool {
-    !matches!(status, DebugStatus::Debugged)
-}
-
-/// Whether plaintext export is allowed under soft policy
-///
-/// # Security
-/// Plaintext export dramatically lowers the cost of data exfiltration \
-/// Under debugging, this operation is denied
-pub fn allow_export_under_soft_policy() -> bool {
-    allow_export_for_status(detect_debugging())
-}
-
-/// Clamp an auto-lock timeout for a given debug status
-///
-/// # Parameters
-/// - `status`: debug detection outcome used for policy evaluation
-/// - `requested`: requested auto-lock timeout
-///
-/// # Returns
-/// The original timeout when no debugger is detected, otherwise the minimum
-/// between the requested timeout and [`DEBUG_MAX_TIMEOUT_SECS`]
-///
-/// # Security
-/// A debugger materially increases the risk associated with long-lived decrypted state \
-/// The timeout is therefore reduced under active debugging
-pub fn clamp_auto_lock_timeout_for_status(status: DebugStatus, requested: Duration) -> Duration {
-    if matches!(status, DebugStatus::Debugged) {
-        requested.min(Duration::from_secs(DEBUG_MAX_TIMEOUT_SECS))
-    } else {
-        requested
+/// Best-effort runtime inspection probe implementation
+fn detect_runtime_inspection_state() -> RuntimeInspectionState {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    {
+        return detect_linux_like_runtime_state();
     }
+
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    {
+        return detect_apple_runtime_state();
+    }
+
+    #[allow(unreachable_code)]
+    RuntimeInspectionState::Unknown
 }
 
-/// Clamp auto-lock timeout when debugging is detected
-pub fn clamp_auto_lock_timeout_under_soft_policy(requested: Duration) -> Duration {
-    clamp_auto_lock_timeout_for_status(detect_debugging(), requested)
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn detect_debugging_linux_proc() -> DebugStatus {
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn detect_linux_like_runtime_state() -> RuntimeInspectionState {
     use std::fs;
 
-    let status = match fs::read_to_string("/proc/self/status") {
-        Ok(s) => s,
-        Err(_) => return DebugStatus::Unknown,
+    let Ok(status) = fs::read_to_string("/proc/self/status") else {
+        return RuntimeInspectionState::Unknown;
     };
 
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("TracerPid:") {
-            return match rest.trim().parse::<u32>() {
-                Ok(0) => DebugStatus::NotDebugged,
-                Ok(_) => DebugStatus::Debugged,
-                Err(_) => DebugStatus::Unknown,
-            };
-        }
-    }
+    let tracer_pid_line = status.lines().find(|line| line.starts_with("TracerPid:"));
+    let Some(line) = tracer_pid_line else {
+        return RuntimeInspectionState::Unknown;
+    };
 
-    DebugStatus::Unknown
+    let value = line
+        .split_once(':')
+        .map(|(_, rhs)| rhs.trim())
+        .unwrap_or_default();
+
+    match value.parse::<u32>() {
+        Ok(0) => RuntimeInspectionState::NotDebugged,
+        Ok(_) => RuntimeInspectionState::Debugged,
+        Err(_) => RuntimeInspectionState::Unknown,
+    }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn detect_debugging_apple_sysctl() -> DebugStatus {
-    use libc::{c_void, getpid, size_t};
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn detect_apple_runtime_state() -> RuntimeInspectionState {
+    use libc::{
+        c_void, getpid, kinfo_proc, size_t, sysctl, CTL_KERN, KERN_PROC, KERN_PROC_PID, P_TRACED,
+    };
+    use std::mem::{size_of, MaybeUninit};
+    use std::ptr;
 
-    let pid = unsafe { getpid() };
-    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    let mut info = MaybeUninit::<kinfo_proc>::zeroed();
+    let mut size = size_of::<kinfo_proc>() as size_t;
+    let mut mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, unsafe { getpid() }];
 
-    let mut info: libc::kinfo_proc = unsafe { std::mem::zeroed() };
-    let mut size = std::mem::size_of::<libc::kinfo_proc>() as size_t;
-
+    // SAFETY:
+    // - `mib` points to a valid MIB array of length 4
+    // - `info` points to writable memory of size `size`
+    // - no output name buffer is requested
     let rc = unsafe {
-        libc::sysctl(
+        sysctl(
             mib.as_mut_ptr(),
             mib.len() as u32,
-            (&mut info as *mut _).cast::<c_void>(),
+            info.as_mut_ptr().cast::<c_void>(),
             &mut size,
-            std::ptr::null_mut(),
+            ptr::null_mut(),
             0,
         )
     };
 
-    if rc != 0 {
-        return DebugStatus::Unknown;
+    if rc != 0 || size < size_of::<kinfo_proc>() as size_t {
+        return RuntimeInspectionState::Unknown;
     }
 
-    if (unsafe { info.kp_proc.p_flag } & libc::P_TRACED) != 0 {
-        DebugStatus::Debugged
+    // SAFETY:
+    // `sysctl` succeeded and wrote a full `kinfo_proc`
+    let info = unsafe { info.assume_init() };
+
+    if (info.kp_proc.p_flag & P_TRACED) != 0 {
+        RuntimeInspectionState::Debugged
     } else {
-        DebugStatus::NotDebugged
+        RuntimeInspectionState::NotDebugged
     }
 }
 
-#[cfg(windows)]
-fn detect_debugging_windows() -> DebugStatus {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn IsDebuggerPresent() -> i32;
+#[cfg(test)]
+mod tests {
+    use super::RuntimeInspectionState;
+
+    /// Restrictive-state classification must be conservative
+    #[test]
+    fn restrictive_state_classification_is_conservative() {
+        assert!(!RuntimeInspectionState::NotDebugged.is_restrictive());
+        assert!(RuntimeInspectionState::Debugged.is_restrictive());
+        assert!(RuntimeInspectionState::Unknown.is_restrictive());
+        assert!(RuntimeInspectionState::TamperSuspected.is_restrictive());
     }
 
-    unsafe {
-        if IsDebuggerPresent() != 0 {
-            DebugStatus::Debugged
-        } else {
-            DebugStatus::NotDebugged
-        }
+    /// Convenience helpers must classify states correctly
+    #[test]
+    fn state_helper_methods_match_variants() {
+        assert!(RuntimeInspectionState::Debugged.is_debugged());
+        assert!(RuntimeInspectionState::Unknown.is_unknown());
+        assert!(RuntimeInspectionState::TamperSuspected.is_tamper_suspected());
+        assert!(!RuntimeInspectionState::NotDebugged.is_debugged());
     }
 }

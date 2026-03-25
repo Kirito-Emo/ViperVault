@@ -7,12 +7,12 @@
 //! - OTP is generated on demand
 //! - Formatted OTP is handled as `Zeroizing<String>`
 //! - Clipboard is cleared automatically after timeout by `ClipboardGuard`
-//! - Clipboard is denied under active debugger (soft policy)
+//! - Clipboard is denied under restrictive runtime policy
 
 use super::engine::totp_generate_formatted;
 use super::error::TotpError;
 use crate::clipboard::guard::ClipboardGuard;
-use crate::core::antidebug::allow_clipboard_under_soft_policy;
+use crate::core::allow_clipboard_under_soft_policy;
 use crate::entries::types::TotpSecret;
 use secrecy::SecretString;
 use std::time::Duration;
@@ -30,7 +30,7 @@ pub const DEFAULT_OTP_CLIPBOARD_TIMEOUT_SECS: u64 = 30;
 /// - `timeout`: optional timeout override
 ///
 /// ## Security notes
-/// - Denied if debugger detected (soft policy)
+/// - Denied if restrictive runtime policy is active
 /// - Avoid logging or persisting the generated OTP
 pub fn totp_generate_and_copy_to_clipboard(
     totp: &TotpSecret,

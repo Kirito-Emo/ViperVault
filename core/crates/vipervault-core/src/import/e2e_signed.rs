@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-//! Import E2E flows
+//! Import E2E flows for signed backups
 //!
 //! # Purpose
 //! Provide a safe high-level flow so the UI or FFI layer does not skip critical
@@ -9,7 +9,7 @@
 //!
 //! # Security
 //! - Denied in decoy mode
-//! - Denied under anti-debug soft policy
+//! - Denied under restrictive runtime policy
 //! - Does not distinguish wrong password from tampering (`AuthFailed`)
 //! - Plaintext JSON produced for unlock is placed into a protected buffer
 //!   immediately after serialization
@@ -33,7 +33,7 @@ use zeroize::Zeroizing;
 /// # Security
 /// - Does not leak wrong password vs tampering
 /// - Runs password-based unlock under [`AuthGate`]
-/// - Denied by the centralized session/runtime policy
+/// - Denied by the centralized runtime policy
 pub async fn import_signed_vault_and_unlock(
     policy: PolicyContext,
     gate: &AuthGate,

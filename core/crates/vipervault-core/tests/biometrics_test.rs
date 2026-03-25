@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
-//! Biometrics contract tests
+//! Biometrics contract and runtime unlock tests
 //!
 //! # Scope
 //! These tests validate both:
@@ -9,18 +9,19 @@
 //! - the high-level runtime biometric unlock flow through `VaultLockManager`
 //!
 //! # Security
-//! Biometrics are used only as a gate to release a previously stored 32-byte master key \
+//! Biometrics are used only as a gate to release a previously stored
+//! 32-byte master key
+//!
 //! These tests ensure:
 //! - availability and backend errors remain correctly classified
 //! - runtime unlock succeeds only for encrypted non-duress vaults
 //! - policy denial remains distinct
-//! - unsupported vault modes fail closed
+//! - unsupported or restrictive runtime states fail closed
 
 use std::io::Cursor;
 use std::time::Duration;
 use vipervault_core::biometrics::{BiometricBackend, BiometricError};
-use vipervault_core::core::policy::PolicyContext;
-use vipervault_core::core::VaultLockManager;
+use vipervault_core::core::{PolicyContext, RuntimeInspectionState, VaultLockManager};
 use vipervault_core::memory::{KeyMaterial, MasterPassword};
 use vipervault_core::vault::create::{create_duress_vault, create_encrypted_vault, VaultKdfPolicy};
 use vipervault_core::vault::duress::UnlockOutcome;
@@ -222,7 +223,8 @@ fn invalid_response_is_preserved() {
 /// Unlocking with a correct master key through the biometric path must unlock the manager
 #[tokio::test]
 async fn unlock_with_master_key_unlocks_manager() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
     let password = MasterPassword::new("pw".to_string());
     let parsed = parsed_encrypted_vault(&password);
     let manager = VaultLockManager::new();
@@ -249,7 +251,8 @@ async fn unlock_with_master_key_unlocks_manager() {
 /// the correct master key
 #[tokio::test]
 async fn unlock_with_biometrics_unlocks_manager() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
     let password = MasterPassword::new("pw".to_string());
     let parsed = parsed_encrypted_vault(&password);
     let manager = VaultLockManager::new();
@@ -289,7 +292,36 @@ async fn unlock_with_biometrics_unlocks_manager() {
 /// Biometric unlock must be denied when policy forbids it
 #[tokio::test]
 async fn unlock_with_biometrics_respects_policy_denied() {
-    let policy = PolicyContext::new(UnlockOutcome::Decoy);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Decoy, RuntimeInspectionState::NotDebugged);
+    let password = MasterPassword::new("pw".to_string());
+    let parsed = parsed_encrypted_vault(&password);
+    let manager = VaultLockManager::new();
+
+    let backend = StubBackend {
+        available: true,
+        result: Ok([1u8; 32]),
+    };
+
+    let err = manager
+        .unlock_with_biometrics(
+            policy,
+            &parsed,
+            &backend,
+            parsed.header.vault_id.as_bytes(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, BiometricError::PolicyDenied));
+    assert!(manager.get_payload().await.is_none());
+}
+
+/// Unknown runtime state must deny biometric unlock
+#[tokio::test]
+async fn unlock_with_biometrics_denied_under_unknown_runtime() {
+    let policy = PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
     let password = MasterPassword::new("pw".to_string());
     let parsed = parsed_encrypted_vault(&password);
     let manager = VaultLockManager::new();
@@ -317,7 +349,8 @@ async fn unlock_with_biometrics_respects_policy_denied() {
 /// Biometric unlock must fail with `Unavailable` when the backend is not available
 #[tokio::test]
 async fn unlock_with_biometrics_unavailable_backend_is_rejected() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
     let password = MasterPassword::new("pw".to_string());
     let parsed = parsed_encrypted_vault(&password);
     let manager = VaultLockManager::new();
@@ -345,7 +378,8 @@ async fn unlock_with_biometrics_unavailable_backend_is_rejected() {
 /// Duress-enabled vaults must not support biometric unlock
 #[tokio::test]
 async fn unlock_with_master_key_rejects_duress_vaults() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
     let primary = MasterPassword::new("pw".to_string());
     let decoy = MasterPassword::new("decoy".to_string());
     let parsed = parsed_duress_vault(&primary, &decoy);
@@ -372,7 +406,8 @@ async fn unlock_with_master_key_rejects_duress_vaults() {
 /// Plaintext-mode parsed vaults must be rejected by the biometric path
 #[tokio::test]
 async fn unlock_with_master_key_rejects_plaintext_mode() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
     let password = MasterPassword::new("pw".to_string());
     let parsed = parsed_plaintext_mode_vault(&password);
     let manager = VaultLockManager::new();
@@ -398,7 +433,8 @@ async fn unlock_with_master_key_rejects_plaintext_mode() {
 /// Incorrect master keys must fail with coarse-grained `AuthFailed`
 #[tokio::test]
 async fn unlock_with_master_key_wrong_key_is_auth_failed() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let policy =
+        PolicyContext::from_parts(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
     let password = MasterPassword::new("pw".to_string());
     let parsed = parsed_encrypted_vault(&password);
     let manager = VaultLockManager::new();

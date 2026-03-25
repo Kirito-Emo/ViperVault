@@ -5,7 +5,7 @@
 //!
 //! # Security
 //! - Denied in decoy policy
-//! - Denied under anti-debug soft policy
+//! - Denied under restrictive runtime policy
 //! - Not supported for duress-enabled vaults (fallback to password unlock)
 //! - Master key is held in [`crate::memory::KeyMaterial`] and zeroized on drop
 //! - Decrypted plaintext JSON is kept in a protected buffer until handed to the
@@ -23,9 +23,10 @@ impl VaultLockManager {
     /// Unlock with a provided master key through the biometric path
     ///
     /// # Security
-    /// - Only supports non-duress encrypted vaults
+    /// - Only supports encrypted vaults
+    /// - Not supported for duress-enabled vaults
     /// - Uses `header_bytes` as AEAD AAD to prevent header tampering
-    /// - Denied by the centralized session/runtime policy
+    /// - Denied by the centralized runtime policy
     pub async fn unlock_with_master_key(
         &self,
         policy: PolicyContext,
@@ -43,11 +44,12 @@ impl VaultLockManager {
         Ok(())
     }
 
-    /// Perform a high-level biometric unlock
+    /// Perform a high-level biometric unlock using the provided backend
     ///
     /// # Security
-    /// - Denied by the centralized session/runtime policy
+    /// - Denied by the centralized runtime policy
     /// - Not supported for duress-enabled vaults
+    /// - The backend only releases a previously stored master key
     pub async fn unlock_with_biometrics(
         &self,
         policy: PolicyContext,

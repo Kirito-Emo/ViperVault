@@ -3,241 +3,281 @@
 
 //! Policy tests
 //!
-//! # Scope
-//! These tests validate the centralized security policy matrix associated with:
-//! - primary vs decoy unlock outcomes
-//! - debugger status soft-policy decisions
-//!
-//! Covered:
-//! - policy context classification
-//! - export policy
-//! - plaintext import policy
-//! - biometric unlock policy
-//! - signed backup transfer policy
-//! - OTPAuth import policy
+//! # Purpose
+//! These tests verify that the centralized runtime policy remains conservative
+//! and deterministic across unlock outcomes and runtime inspection states
 //!
 //! # Security
-//! Decoy mode and active debugging must consistently deny sensitive operations \
-//! The policy matrix must remain deterministic and free from accidental divergence
-//! between individual capability checks
+//! The policy layer is responsible for denying or degrading sensitive
+//! operations under decoy sessions and restrictive runtime states
 
-use vipervault_core::core::DebugStatus;
-use vipervault_core::core::policy::PolicyContext;
+use vipervault_core::core::{PolicyContext, RuntimeInspectionState};
 use vipervault_core::vault::duress::UnlockOutcome;
 
-/// Primary outcome must produce a non-decoy policy context
+/// Build a policy context for tests
+fn policy(outcome: UnlockOutcome, runtime_state: RuntimeInspectionState) -> PolicyContext {
+    PolicyContext::from_parts(outcome, runtime_state)
+}
+
+/// A clean primary session must allow sensitive operations
 #[test]
-fn primary_outcome_is_not_decoy() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
-    assert!(!policy.is_decoy());
+fn primary_not_debugged_allows_sensitive_operations() {
+    let policy = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
+
     assert_eq!(policy.outcome(), UnlockOutcome::Primary);
+    assert_eq!(policy.runtime_state(), RuntimeInspectionState::NotDebugged);
+    assert!(!policy.is_decoy());
+    assert!(!policy.is_runtime_restrictive());
+    assert!(!policy.is_tamper_suspected());
+
+    assert!(policy.allow_biometric_unlock());
+    assert!(policy.allow_clipboard_copy());
+    assert!(policy.allow_totp_copy());
+    assert!(policy.allow_signed_backup_transfer());
+    assert!(policy.allow_plaintext_export());
+    assert!(policy.allow_plaintext_import());
+    assert!(policy.allow_otpauth_import());
+
+    assert!(!policy.requires_short_autolock());
+    assert!(!policy.requires_strong_reauth_for_sensitive_ops());
 }
 
-/// Decoy outcome must produce a decoy policy context
+/// A decoy session must deny exposure-prone operations even when the runtime is clean
 #[test]
-fn decoy_outcome_is_decoy() {
-    let policy = PolicyContext::new(UnlockOutcome::Decoy);
-    assert!(policy.is_decoy());
+fn decoy_not_debugged_denies_sensitive_operations() {
+    let policy = policy(UnlockOutcome::Decoy, RuntimeInspectionState::NotDebugged);
+
     assert_eq!(policy.outcome(), UnlockOutcome::Decoy);
+    assert_eq!(policy.runtime_state(), RuntimeInspectionState::NotDebugged);
+    assert!(policy.is_decoy());
+    assert!(!policy.is_runtime_restrictive());
+    assert!(!policy.is_tamper_suspected());
+
+    assert!(!policy.allow_biometric_unlock());
+    assert!(!policy.allow_clipboard_copy());
+    assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_signed_backup_transfer());
+    assert!(!policy.allow_plaintext_export());
+    assert!(!policy.allow_plaintext_import());
+    assert!(!policy.allow_otpauth_import());
+
+    assert!(!policy.requires_short_autolock());
+    assert!(!policy.requires_strong_reauth_for_sensitive_ops());
 }
 
-/// Primary policy must allow all sensitive capabilities when no debugger is detected
+/// A debugged runtime must deny sensitive operations
 #[test]
-fn primary_policy_allows_sensitive_capabilities_when_not_debugged() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+fn primary_debugged_denies_sensitive_operations() {
+    let policy = policy(UnlockOutcome::Primary, RuntimeInspectionState::Debugged);
 
-    assert!(policy.allow_secret_export_for_status(DebugStatus::NotDebugged));
-    assert!(policy.allow_plaintext_import_for_status(DebugStatus::NotDebugged));
-    assert!(policy.allow_biometric_unlock_for_status(DebugStatus::NotDebugged));
-    assert!(policy.allow_signed_backup_transfer_for_status(DebugStatus::NotDebugged));
-    assert!(policy.allow_otpauth_import_for_status(DebugStatus::NotDebugged));
+    assert_eq!(policy.runtime_state(), RuntimeInspectionState::Debugged);
+    assert!(!policy.is_decoy());
+    assert!(policy.is_runtime_restrictive());
+    assert!(!policy.is_tamper_suspected());
+
+    assert!(!policy.allow_biometric_unlock());
+    assert!(!policy.allow_clipboard_copy());
+    assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_signed_backup_transfer());
+    assert!(!policy.allow_plaintext_export());
+    assert!(!policy.allow_plaintext_import());
+    assert!(!policy.allow_otpauth_import());
+
+    assert!(policy.requires_short_autolock());
+    assert!(policy.requires_strong_reauth_for_sensitive_ops());
 }
 
-/// Primary policy must deny all sensitive capabilities when a debugger is detected
+/// An unknown runtime must be treated conservatively
 #[test]
-fn primary_policy_denies_sensitive_capabilities_when_debugged() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+fn primary_unknown_denies_sensitive_operations() {
+    let policy = policy(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
 
-    assert!(!policy.allow_secret_export_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_plaintext_import_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_biometric_unlock_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_signed_backup_transfer_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_otpauth_import_for_status(DebugStatus::Debugged));
+    assert_eq!(policy.runtime_state(), RuntimeInspectionState::Unknown);
+    assert!(!policy.is_decoy());
+    assert!(policy.is_runtime_restrictive());
+    assert!(!policy.is_tamper_suspected());
+
+    assert!(!policy.allow_biometric_unlock());
+    assert!(!policy.allow_clipboard_copy());
+    assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_signed_backup_transfer());
+    assert!(!policy.allow_plaintext_export());
+    assert!(!policy.allow_plaintext_import());
+    assert!(!policy.allow_otpauth_import());
+
+    assert!(policy.requires_short_autolock());
+    assert!(policy.requires_strong_reauth_for_sensitive_ops());
 }
 
-/// Primary policy must remain permissive when debugger status is unknown
+/// A tamper-suspected runtime must be treated as strongly restrictive
 #[test]
-fn primary_policy_remains_permissive_when_debug_status_is_unknown() {
-    let policy = PolicyContext::new(UnlockOutcome::Primary);
+fn primary_tamper_suspected_denies_sensitive_operations() {
+    let policy = policy(
+        UnlockOutcome::Primary,
+        RuntimeInspectionState::TamperSuspected,
+    );
 
-    assert!(policy.allow_secret_export_for_status(DebugStatus::Unknown));
-    assert!(policy.allow_plaintext_import_for_status(DebugStatus::Unknown));
-    assert!(policy.allow_biometric_unlock_for_status(DebugStatus::Unknown));
-    assert!(policy.allow_signed_backup_transfer_for_status(DebugStatus::Unknown));
-    assert!(policy.allow_otpauth_import_for_status(DebugStatus::Unknown));
+    assert_eq!(
+        policy.runtime_state(),
+        RuntimeInspectionState::TamperSuspected
+    );
+    assert!(!policy.is_decoy());
+    assert!(policy.is_runtime_restrictive());
+    assert!(policy.is_tamper_suspected());
+
+    assert!(!policy.allow_biometric_unlock());
+    assert!(!policy.allow_clipboard_copy());
+    assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_signed_backup_transfer());
+    assert!(!policy.allow_plaintext_export());
+    assert!(!policy.allow_plaintext_import());
+    assert!(!policy.allow_otpauth_import());
+
+    assert!(policy.requires_short_autolock());
+    assert!(policy.requires_strong_reauth_for_sensitive_ops());
 }
 
-/// Decoy policy must deny all sensitive capabilities even when no debugger is detected
+/// The state-specific helpers must remain aligned with the context-bound helpers
 #[test]
-fn decoy_policy_denies_sensitive_capabilities_when_not_debugged() {
-    let policy = PolicyContext::new(UnlockOutcome::Decoy);
+fn state_specific_export_helpers_match_context_helpers() {
+    let clean = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
+    let debugged = policy(UnlockOutcome::Primary, RuntimeInspectionState::Debugged);
+    let unknown = policy(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
+    let tamper = policy(
+        UnlockOutcome::Primary,
+        RuntimeInspectionState::TamperSuspected,
+    );
 
-    assert!(!policy.allow_secret_export_for_status(DebugStatus::NotDebugged));
-    assert!(!policy.allow_plaintext_import_for_status(DebugStatus::NotDebugged));
-    assert!(!policy.allow_biometric_unlock_for_status(DebugStatus::NotDebugged));
-    assert!(!policy.allow_signed_backup_transfer_for_status(DebugStatus::NotDebugged));
-    assert!(!policy.allow_otpauth_import_for_status(DebugStatus::NotDebugged));
+    assert_eq!(
+        clean.allow_secret_export_for_state(RuntimeInspectionState::NotDebugged),
+        clean.allow_secret_export()
+    );
+    assert_eq!(
+        debugged.allow_secret_export_for_state(RuntimeInspectionState::Debugged),
+        debugged.allow_secret_export()
+    );
+    assert_eq!(
+        unknown.allow_secret_export_for_state(RuntimeInspectionState::Unknown),
+        unknown.allow_secret_export()
+    );
+    assert_eq!(
+        tamper.allow_secret_export_for_state(RuntimeInspectionState::TamperSuspected),
+        tamper.allow_secret_export()
+    );
 }
 
-/// Decoy policy must deny all sensitive capabilities when a debugger is detected
+/// The state-specific plaintext import helpers must remain aligned with the context-bound helpers
 #[test]
-fn decoy_policy_denies_sensitive_capabilities_when_debugged() {
-    let policy = PolicyContext::new(UnlockOutcome::Decoy);
+fn state_specific_plaintext_import_helpers_match_context_helpers() {
+    let clean = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
+    let debugged = policy(UnlockOutcome::Primary, RuntimeInspectionState::Debugged);
+    let unknown = policy(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
+    let tamper = policy(
+        UnlockOutcome::Primary,
+        RuntimeInspectionState::TamperSuspected,
+    );
 
-    assert!(!policy.allow_secret_export_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_plaintext_import_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_biometric_unlock_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_signed_backup_transfer_for_status(DebugStatus::Debugged));
-    assert!(!policy.allow_otpauth_import_for_status(DebugStatus::Debugged));
+    assert_eq!(
+        clean.allow_plaintext_import_for_state(RuntimeInspectionState::NotDebugged),
+        clean.allow_plaintext_import()
+    );
+    assert_eq!(
+        debugged.allow_plaintext_import_for_state(RuntimeInspectionState::Debugged),
+        debugged.allow_plaintext_import()
+    );
+    assert_eq!(
+        unknown.allow_plaintext_import_for_state(RuntimeInspectionState::Unknown),
+        unknown.allow_plaintext_import()
+    );
+    assert_eq!(
+        tamper.allow_plaintext_import_for_state(RuntimeInspectionState::TamperSuspected),
+        tamper.allow_plaintext_import()
+    );
 }
 
-/// Decoy policy must deny all sensitive capabilities when debugger status is unknown
+/// The state-specific biometric helpers must remain aligned with the context-bound helpers
 #[test]
-fn decoy_policy_denies_sensitive_capabilities_when_debug_status_is_unknown() {
-    let policy = PolicyContext::new(UnlockOutcome::Decoy);
+fn state_specific_biometric_helpers_match_context_helpers() {
+    let clean = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
+    let debugged = policy(UnlockOutcome::Primary, RuntimeInspectionState::Debugged);
+    let unknown = policy(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
+    let tamper = policy(
+        UnlockOutcome::Primary,
+        RuntimeInspectionState::TamperSuspected,
+    );
 
-    assert!(!policy.allow_secret_export_for_status(DebugStatus::Unknown));
-    assert!(!policy.allow_plaintext_import_for_status(DebugStatus::Unknown));
-    assert!(!policy.allow_biometric_unlock_for_status(DebugStatus::Unknown));
-    assert!(!policy.allow_signed_backup_transfer_for_status(DebugStatus::Unknown));
-    assert!(!policy.allow_otpauth_import_for_status(DebugStatus::Unknown));
+    assert_eq!(
+        clean.allow_biometric_unlock_for_state(RuntimeInspectionState::NotDebugged),
+        clean.allow_biometric_unlock()
+    );
+    assert_eq!(
+        debugged.allow_biometric_unlock_for_state(RuntimeInspectionState::Debugged),
+        debugged.allow_biometric_unlock()
+    );
+    assert_eq!(
+        unknown.allow_biometric_unlock_for_state(RuntimeInspectionState::Unknown),
+        unknown.allow_biometric_unlock()
+    );
+    assert_eq!(
+        tamper.allow_biometric_unlock_for_state(RuntimeInspectionState::TamperSuspected),
+        tamper.allow_biometric_unlock()
+    );
 }
 
-/// Equal contexts must produce equal policy decisions
+/// The state-specific signed-backup helpers must remain aligned with the context-bound helpers
 #[test]
-fn equal_contexts_produce_equal_policy_decisions() {
-    let lhs = PolicyContext::new(UnlockOutcome::Primary);
-    let rhs = PolicyContext::new(UnlockOutcome::Primary);
+fn state_specific_signed_backup_helpers_match_context_helpers() {
+    let clean = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
+    let debugged = policy(UnlockOutcome::Primary, RuntimeInspectionState::Debugged);
+    let unknown = policy(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
+    let tamper = policy(
+        UnlockOutcome::Primary,
+        RuntimeInspectionState::TamperSuspected,
+    );
 
-    for status in [
-        DebugStatus::NotDebugged,
-        DebugStatus::Debugged,
-        DebugStatus::Unknown,
-    ] {
-        assert_eq!(
-            lhs.allow_secret_export_for_status(status),
-            rhs.allow_secret_export_for_status(status)
-        );
-        assert_eq!(
-            lhs.allow_plaintext_import_for_status(status),
-            rhs.allow_plaintext_import_for_status(status)
-        );
-        assert_eq!(
-            lhs.allow_biometric_unlock_for_status(status),
-            rhs.allow_biometric_unlock_for_status(status)
-        );
-        assert_eq!(
-            lhs.allow_signed_backup_transfer_for_status(status),
-            rhs.allow_signed_backup_transfer_for_status(status)
-        );
-        assert_eq!(
-            lhs.allow_otpauth_import_for_status(status),
-            rhs.allow_otpauth_import_for_status(status)
-        );
-    }
+    assert_eq!(
+        clean.allow_signed_backup_transfer_for_state(RuntimeInspectionState::NotDebugged),
+        clean.allow_signed_backup_transfer()
+    );
+    assert_eq!(
+        debugged.allow_signed_backup_transfer_for_state(RuntimeInspectionState::Debugged),
+        debugged.allow_signed_backup_transfer()
+    );
+    assert_eq!(
+        unknown.allow_signed_backup_transfer_for_state(RuntimeInspectionState::Unknown),
+        unknown.allow_signed_backup_transfer()
+    );
+    assert_eq!(
+        tamper.allow_signed_backup_transfer_for_state(RuntimeInspectionState::TamperSuspected),
+        tamper.allow_signed_backup_transfer()
+    );
 }
 
-/// Capability decisions must remain aligned across all export/import-oriented paths
+/// The state-specific OTPAuth helpers must remain aligned with the context-bound helpers
 #[test]
-fn sensitive_capability_decisions_remain_aligned_per_status() {
-    for outcome in [UnlockOutcome::Primary, UnlockOutcome::Decoy] {
-        let policy = PolicyContext::new(outcome);
+fn state_specific_otpauth_helpers_match_context_helpers() {
+    let clean = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);
+    let debugged = policy(UnlockOutcome::Primary, RuntimeInspectionState::Debugged);
+    let unknown = policy(UnlockOutcome::Primary, RuntimeInspectionState::Unknown);
+    let tamper = policy(
+        UnlockOutcome::Primary,
+        RuntimeInspectionState::TamperSuspected,
+    );
 
-        for status in [
-            DebugStatus::NotDebugged,
-            DebugStatus::Debugged,
-            DebugStatus::Unknown,
-        ] {
-            let export = policy.allow_secret_export_for_status(status);
-            let plaintext_import = policy.allow_plaintext_import_for_status(status);
-            let biometric = policy.allow_biometric_unlock_for_status(status);
-            let signed_backup = policy.allow_signed_backup_transfer_for_status(status);
-            let otpauth = policy.allow_otpauth_import_for_status(status);
-
-            assert_eq!(export, plaintext_import);
-            assert_eq!(export, biometric);
-            assert_eq!(export, signed_backup);
-            assert_eq!(export, otpauth);
-        }
-    }
-}
-
-/// Repeated construction must not leak state across policy instances
-///
-/// # Security
-/// Different instances constructed from the same outcome must remain identical \
-/// Different outcomes must preserve their own classification independently of
-/// any previously constructed instance
-#[test]
-fn policy_context_has_no_cross_instance_state() {
-    let primary = PolicyContext::new(UnlockOutcome::Primary);
-    let decoy = PolicyContext::new(UnlockOutcome::Decoy);
-    let primary_again = PolicyContext::new(UnlockOutcome::Primary);
-    let decoy_again = PolicyContext::new(UnlockOutcome::Decoy);
-
-    assert_eq!(primary, primary_again);
-    assert_eq!(decoy, decoy_again);
-
-    assert!(!primary.is_decoy());
-    assert!(decoy.is_decoy());
-    assert!(!primary_again.is_decoy());
-    assert!(decoy_again.is_decoy());
-
-    for status in [
-        DebugStatus::NotDebugged,
-        DebugStatus::Debugged,
-        DebugStatus::Unknown,
-    ] {
-        assert_eq!(
-            primary.allow_secret_export_for_status(status),
-            primary_again.allow_secret_export_for_status(status)
-        );
-        assert_eq!(
-            primary.allow_plaintext_import_for_status(status),
-            primary_again.allow_plaintext_import_for_status(status)
-        );
-        assert_eq!(
-            primary.allow_biometric_unlock_for_status(status),
-            primary_again.allow_biometric_unlock_for_status(status)
-        );
-        assert_eq!(
-            primary.allow_signed_backup_transfer_for_status(status),
-            primary_again.allow_signed_backup_transfer_for_status(status)
-        );
-        assert_eq!(
-            primary.allow_otpauth_import_for_status(status),
-            primary_again.allow_otpauth_import_for_status(status)
-        );
-
-        assert_eq!(
-            decoy.allow_secret_export_for_status(status),
-            decoy_again.allow_secret_export_for_status(status)
-        );
-        assert_eq!(
-            decoy.allow_plaintext_import_for_status(status),
-            decoy_again.allow_plaintext_import_for_status(status)
-        );
-        assert_eq!(
-            decoy.allow_biometric_unlock_for_status(status),
-            decoy_again.allow_biometric_unlock_for_status(status)
-        );
-        assert_eq!(
-            decoy.allow_signed_backup_transfer_for_status(status),
-            decoy_again.allow_signed_backup_transfer_for_status(status)
-        );
-        assert_eq!(
-            decoy.allow_otpauth_import_for_status(status),
-            decoy_again.allow_otpauth_import_for_status(status)
-        );
-    }
+    assert_eq!(
+        clean.allow_otpauth_import_for_state(RuntimeInspectionState::NotDebugged),
+        clean.allow_otpauth_import()
+    );
+    assert_eq!(
+        debugged.allow_otpauth_import_for_state(RuntimeInspectionState::Debugged),
+        debugged.allow_otpauth_import()
+    );
+    assert_eq!(
+        unknown.allow_otpauth_import_for_state(RuntimeInspectionState::Unknown),
+        unknown.allow_otpauth_import()
+    );
+    assert_eq!(
+        tamper.allow_otpauth_import_for_state(RuntimeInspectionState::TamperSuspected),
+        tamper.allow_otpauth_import()
+    );
 }
