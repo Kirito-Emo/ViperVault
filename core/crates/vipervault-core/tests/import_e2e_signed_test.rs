@@ -10,6 +10,7 @@
 //! - wrong password coarse-grained rejection
 //! - tamper coarse-grained rejection
 //! - resulting manager usability after successful import
+//! - decrypted payload availability only after successful unlock
 //!
 //! # Security
 //! This path is the async UI-facing import boundary. These tests ensure that:
@@ -18,19 +19,21 @@
 //! - wrong password and tampering remain indistinguishable
 //! - imported content becomes available only through the unlocked manager
 
+use secrecy::ExposeSecret;
 use std::time::Duration;
-use vipervault_core::backup::{BackupKdfPolicy, encode_signed_backup};
-use vipervault_core::core::VaultLockManager;
+use vipervault_core::backup::{encode_signed_backup, BackupKdfPolicy};
 use vipervault_core::core::auth_gate::AuthGate;
 use vipervault_core::core::policy::PolicyContext;
 use vipervault_core::core::rate_limit::UnlockThrottlePolicy;
+use vipervault_core::core::VaultLockManager;
 use vipervault_core::entries::types::VaultEntry;
-use vipervault_core::import::{ImportError, import_signed_vault_and_unlock};
+use vipervault_core::import::{import_signed_vault_and_unlock, ImportError};
 use vipervault_core::memory::MasterPassword;
-use vipervault_core::vault::create::{VaultKdfPolicy, create_encrypted_vault};
+use vipervault_core::vault::create::{create_encrypted_vault, VaultKdfPolicy};
 use vipervault_core::vault::duress::UnlockOutcome;
-use vipervault_core::vault::{VaultPayload, encode_vault_storage};
+use vipervault_core::vault::{encode_vault_storage, VaultPayload};
 
+/// Build the backup KDF policy used across tests
 fn backup_kdf() -> BackupKdfPolicy {
     BackupKdfPolicy {
         mem_kib: 64 * 1024,
@@ -39,6 +42,7 @@ fn backup_kdf() -> BackupKdfPolicy {
     }
 }
 
+/// Build the vault KDF policy used across tests
 fn vault_kdf() -> VaultKdfPolicy {
     VaultKdfPolicy {
         mem_kib: 64 * 1024,
@@ -47,6 +51,7 @@ fn vault_kdf() -> VaultKdfPolicy {
     }
 }
 
+/// Build a tiny throttle policy for tests
 fn tiny_test_policy() -> UnlockThrottlePolicy {
     UnlockThrottlePolicy {
         quiet_period: Duration::from_secs(60),
@@ -55,6 +60,7 @@ fn tiny_test_policy() -> UnlockThrottlePolicy {
     }
 }
 
+/// Build a representative payload used across E2E import tests
 fn sample_payload() -> VaultPayload {
     let entry = VaultEntry::new_password(
         "GitHub".to_string(),
@@ -107,6 +113,41 @@ async fn import_signed_e2e_success_unlocks_manager() {
     assert_eq!(view.expose_secret(), "super-secret");
 }
 
+/// Successful E2E import must make the decrypted payload available through the
+/// runtime lock manager
+#[tokio::test]
+async fn import_signed_e2e_exposes_expected_payload_after_unlock() {
+    let policy = PolicyContext::new(UnlockOutcome::Primary);
+    let gate = AuthGate::new(tiny_test_policy());
+    let manager = VaultLockManager::new();
+    let password = MasterPassword::new("pw".to_string());
+
+    let payload = sample_payload();
+    let vault = create_encrypted_vault(&password, &payload, 1, vault_kdf()).expect("create vault");
+    let vault_bytes = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode vault");
+
+    let signed =
+        encode_signed_backup(policy, &password, &vault_bytes, backup_kdf()).expect("encode backup");
+
+    import_signed_vault_and_unlock(
+        policy,
+        &gate,
+        &manager,
+        password,
+        &signed,
+        Duration::from_secs(60),
+    )
+        .await
+        .expect("e2e import");
+
+    let unlocked_payload = manager.get_payload().await.expect("payload");
+    assert_eq!(unlocked_payload.entries.len(), 1);
+
+    let entry = &unlocked_payload.entries[0];
+    assert_eq!(entry.secret.title.expose_secret(), "GitHub");
+    assert_eq!(entry.secret.secret.expose_secret(), "super-secret");
+}
+
 /// Decoy policy must deny the E2E signed import path
 #[tokio::test]
 async fn import_signed_e2e_denied_in_decoy() {
@@ -127,6 +168,7 @@ async fn import_signed_e2e_denied_in_decoy() {
     .unwrap_err();
 
     assert!(matches!(err, ImportError::PolicyDenied));
+    assert!(manager.get_payload().await.is_none());
 }
 
 /// Wrong password must remain coarse-grained at the E2E layer
@@ -158,6 +200,7 @@ async fn import_signed_e2e_wrong_password_is_auth_failed() {
 
     assert!(matches!(err, ImportError::AuthFailed));
     assert!(manager.list_entries().await.is_none());
+    assert!(manager.get_payload().await.is_none());
 }
 
 /// Tampering must remain coarse-grained at the E2E layer
@@ -174,6 +217,7 @@ async fn import_signed_e2e_tamper_is_auth_failed() {
 
     let mut signed =
         encode_signed_backup(policy, &password, &vault_bytes, backup_kdf()).expect("encode backup");
+
     let last = signed.len() - 1;
     signed[last] ^= 0x01;
 
@@ -190,6 +234,7 @@ async fn import_signed_e2e_tamper_is_auth_failed() {
 
     assert!(matches!(err, ImportError::AuthFailed));
     assert!(manager.list_entries().await.is_none());
+    assert!(manager.get_payload().await.is_none());
 }
 
 /// Successful import must leave the manager usable for follow-up reads

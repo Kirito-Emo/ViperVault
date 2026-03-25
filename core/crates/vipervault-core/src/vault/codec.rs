@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2025 Emanuele Relmi
 
+//! Vault container codec
+//!
+//! # Security
+//! - Plaintext export is denied under the anti-debug soft policy
+//! - Duress-enabled vaults must not be exported as plaintext
+//! - Raw header bytes are preserved exactly as stored because they are used as
+//!   AEAD AAD
+
 use crate::core::allow_export_under_soft_policy;
 use crate::vault::{
-    MAGIC, MAX_HEADER_LEN, ParsedVaultFile, StorageMode, VaultHeader, VaultParseError, VaultStorage,
+    ParsedVaultFile, StorageMode, VaultHeader, VaultParseError, VaultStorage, MAGIC, MAX_HEADER_LEN,
 };
 use std::io::{Read, Write};
-use zeroize::{Zeroize, Zeroizing};
 
 /// Hard cap for vault container payload to limit allocations from untrusted input (bytes)
 pub const MAX_VAULT_CONTAINER_PAYLOAD_LEN: u64 = 16 * 1024 * 1024; // 16 MiB
@@ -15,7 +22,7 @@ pub const MAX_VAULT_CONTAINER_PAYLOAD_LEN: u64 = 16 * 1024 * 1024; // 16 MiB
 ///
 /// # Security
 /// - Plaintext export is denied under the anti-debug soft policy
-/// - Duress-enabled vaults MUST NOT be exported as plaintext (policy hardening)
+/// - Duress-enabled vaults must not be exported as plaintext (policy hardening)
 pub fn encode_vault_storage(
     header: &VaultHeader,
     storage: &VaultStorage,
@@ -40,8 +47,7 @@ pub fn encode_vault_storage(
         VaultStorage::PlaintextJson { json } => (StorageMode::PlaintextJson, json.as_slice()),
     };
 
-    // Wipe intermediate header bytes on drop
-    let header_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(serialize_header_json(header)?);
+    let header_bytes = serialize_header_json(header)?;
     if header_bytes.len() as u32 > MAX_HEADER_LEN {
         return Err(VaultParseError::HeaderTooLarge);
     }
@@ -59,7 +65,7 @@ pub fn encode_vault_storage(
     Ok(out)
 }
 
-/// Decodes a vault container from a reader
+/// Decode a vault container from a reader
 ///
 /// # Parameters
 /// - `expected_format_version`:
@@ -90,6 +96,7 @@ pub fn decode_vault_file(
     if format_version == 0 {
         return Err(VaultParseError::UnsupportedVersion);
     }
+
     if let Some(expected) = expected_format_version
         && format_version != expected
     {
@@ -114,21 +121,15 @@ pub fn decode_vault_file(
     if header_len > MAX_HEADER_LEN {
         return Err(VaultParseError::HeaderTooLarge);
     }
-    let header_len_usize: usize =
+
+    let header_len_usize =
         usize::try_from(header_len).map_err(|_| VaultParseError::HeaderTooLarge)?;
 
-    // HEADER_JSON (read into a zeroizing buffer)
-    let mut header_buf: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; header_len_usize]);
-    input.read_exact(&mut header_buf)?;
-    let header_bytes = header_buf.to_vec();
+    // HEADER_JSON
+    let mut header_bytes = vec![0u8; header_len_usize];
+    input.read_exact(&mut header_bytes)?;
 
-    let header = match deserialize_header_json(&header_buf) {
-        Ok(h) => h,
-        Err(e) => {
-            header_buf.zeroize();
-            return Err(e);
-        }
-    };
+    let header = deserialize_header_json(&header_bytes)?;
 
     // Policy hardening for duress mode
     if header.duress.is_some() && mode == StorageMode::PlaintextJson {
@@ -140,7 +141,8 @@ pub fn decode_vault_file(
     if payload_len > max_payload_len {
         return Err(VaultParseError::PayloadTooLarge);
     }
-    let payload_len_usize: usize =
+
+    let payload_len_usize =
         usize::try_from(payload_len).map_err(|_| VaultParseError::PayloadTooLarge)?;
 
     // PAYLOAD
@@ -170,7 +172,7 @@ pub fn decode_vault_file(
 ///
 /// # Intended usage
 /// - Internal helper for writing vault data to files, buffers or tests
-/// - Must not be treated as a user-facing "export" API
+/// - Must not be treated as a user-facing export API
 ///
 /// # Errors
 /// Returns [`VaultParseError`] if encoding or writing fails
@@ -186,38 +188,42 @@ pub(crate) fn write_vault_storage(
     Ok(())
 }
 
-/// Serializes a header into JSON bytes
+/// Serialize a header into JSON bytes
+///
+/// # Security
+/// The resulting bytes are not secret, but they are integrity-critical because
+/// they are later used as AEAD AAD
 fn serialize_header_json(header: &VaultHeader) -> Result<Vec<u8>, VaultParseError> {
     serde_json::to_vec(header).map_err(|_| VaultParseError::Serialize)
 }
 
-/// Deserializes a header from JSON bytes
+/// Deserialize a header from JSON bytes
 fn deserialize_header_json(bytes: &[u8]) -> Result<VaultHeader, VaultParseError> {
     serde_json::from_slice(bytes).map_err(|_| VaultParseError::Deserialize)
 }
 
-/// Reads a little-endian u16
+/// Read a little-endian `u16`
 fn read_u16_le(mut r: impl Read) -> Result<u16, VaultParseError> {
     let mut buf = [0u8; 2];
     r.read_exact(&mut buf)?;
     Ok(u16::from_le_bytes(buf))
 }
 
-/// Reads a little-endian u32
+/// Read a little-endian `u32`
 fn read_u32_le(mut r: impl Read) -> Result<u32, VaultParseError> {
     let mut buf = [0u8; 4];
     r.read_exact(&mut buf)?;
     Ok(u32::from_le_bytes(buf))
 }
 
-/// Reads a little-endian u64
+/// Read a little-endian `u64`
 fn read_u64_le(mut r: impl Read) -> Result<u64, VaultParseError> {
     let mut buf = [0u8; 8];
     r.read_exact(&mut buf)?;
     Ok(u64::from_le_bytes(buf))
 }
 
-/// Reads a single byte
+/// Read a single byte
 fn read_u8(mut r: impl Read) -> Result<u8, VaultParseError> {
     let mut buf = [0u8; 1];
     r.read_exact(&mut buf)?;

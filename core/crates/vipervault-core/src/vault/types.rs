@@ -69,7 +69,7 @@ pub struct ParsedVaultFile {
 /// Keep this structure *minimal* to avoid metadata leakage
 ///
 /// # Security
-/// This header must be authenticated when encrypting/decrypting (e.g., as AEAD AAD),
+/// This header must be authenticated when encrypting/decrypting (e.g. AEAD AAD),
 /// so attackers cannot tamper with KDF params, salt, nonce, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultHeader {

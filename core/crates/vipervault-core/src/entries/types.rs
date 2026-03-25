@@ -22,43 +22,65 @@ use zeroize::Zeroizing;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EntryType {
-    Password,   // Username + password entry
-    SecureNote, // Secure free-form note
-    Card,       // Payment card or similar
-    Totp,       // Time-based one-time password (TOTP) secret
+    /// Username + password entry
+    Password,
+
+    /// Secure free-form note
+    SecureNote,
+
+    /// Payment card or similar
+    Card,
+
+    /// Time-based one-time password (TOTP) secret
+    Totp,
 }
 
 /// TOTP HMAC algorithm
 ///
-/// ## Security note
+/// # Security
 /// TOTP generation must use constant-time HMAC implementations
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TotpAlgorithm {
-    Sha1,   // HMAC-SHA1 (RFC 6238 baseline; still widely supported)
-    Sha256, // HMAC-SHA256
-    Sha512, // HMAC-SHA512
+    /// HMAC-SHA1 (RFC 6238 baseline; still widely supported)
+    Sha1,
+
+    /// HMAC-SHA256
+    Sha256,
+
+    /// HMAC-SHA512
+    Sha512,
 }
 
 /// TOTP parameters stored inside the encrypted vault
 #[derive(Debug, Clone)]
 pub struct TotpSecret {
-    pub issuer: Option<SecretString>, // Optional issuer (e.g., "GitHub")
-    pub account_name: Option<SecretString>, // Optional account name (e.g., email / username)
+    /// Optional issuer (e.g. `"GitHub"`)
+    pub issuer: Option<SecretString>,
+
+    /// Optional account name (e.g. email or username)
+    pub account_name: Option<SecretString>,
+
     /// Base32-encoded secret (no spaces; uppercase recommended)
     ///
-    /// ## Security note
+    /// # Security
     /// Kept as `SecretString` and never logged
     pub secret_b32: SecretString,
-    pub digits: u8,               // Output digits (typically 6 or 8)
-    pub period_secs: u32,         // Period in seconds (typically 30)
-    pub algorithm: TotpAlgorithm, // HMAC algorithm
+
+    /// Output digits (typically 6 or 8)
+    pub digits: u8,
+
+    /// Period in seconds (typically 30)
+    pub period_secs: u32,
+
+    /// HMAC algorithm
+    pub algorithm: TotpAlgorithm,
 }
 
 impl TotpSecret {
     /// Validate the TOTP parameters
     ///
-    /// ## Security note
+    /// # Security
     /// This rejects obviously unsafe or ambiguous parameter sets
     pub fn validate(&self) -> Result<(), EntryError> {
         if !(self.digits == 6 || self.digits == 7 || self.digits == 8) {
@@ -71,7 +93,7 @@ impl TotpSecret {
 
         // Minimal sanity check for base32:
         // - bounded length to avoid pathological inputs
-        // - ASCII-only to avoid invisible unicode tricks
+        // - ASCII-only to avoid invisible Unicode tricks
         let s = self.secret_b32.expose_secret();
         if s.is_empty() {
             return Err(EntryError::EmptyField);
@@ -101,12 +123,15 @@ impl TotpSecret {
 /// Non-sensitive metadata required for indexing
 ///
 /// # Security
-/// This struct MUST NOT contain user-identifying or user-visible data
+/// This struct must not contain user-identifying or user-visible data \
 /// All such data is stored encrypted in [`EntrySecret`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryMetadata {
-    pub id: Uuid,              // Stable unique identifier
-    pub entry_type: EntryType, // Entry category/type
+    /// Stable unique identifier
+    pub id: Uuid,
+
+    /// Entry category/type
+    pub entry_type: EntryType,
 }
 
 /// A minimal UI-facing entry summary (still sensitive)
@@ -116,9 +141,14 @@ pub struct EntryMetadata {
 /// - `title` is kept as `SecretString` to avoid accidental exposure and to enable zeroization
 #[derive(Debug, Clone)]
 pub struct EntrySummary {
-    pub id: Uuid,              // Entry identifier
-    pub entry_type: EntryType, // Entry category/type
-    pub title: SecretString,   // User-visible title (sensitive)
+    /// Entry identifier
+    pub id: Uuid,
+
+    /// Entry category/type
+    pub entry_type: EntryType,
+
+    /// User-visible title (sensitive)
+    pub title: SecretString,
 }
 
 impl EntrySummary {
@@ -139,17 +169,32 @@ impl EntrySummary {
 /// - Dropping this value wipes secrets from memory
 ///
 /// # Note on `extra`
-/// `SecretBox<T>` is intentionally not `Clone` to prevent accidental secret copying
+/// `SecretBox<T>` is intentionally not `Clone` to prevent accidental secret copying \
 /// For UI consumption it returns an owned `Zeroizing<Vec<u8>>` copy when needed
 #[derive(Debug)]
 pub struct EntryView {
+    /// Entry identifier
     pub id: Uuid,
+
+    /// Entry category/type
     pub entry_type: EntryType,
+
+    /// User-visible title
     pub title: SecretString,
+
+    /// Optional note
     pub note: Option<SecretString>,
+
+    /// Optional username
     pub username: Option<SecretString>,
+
+    /// Primary secret
     pub secret: SecretString,
+
+    /// Optional binary attachment/secret blob
     pub extra: Option<Zeroizing<Vec<u8>>>,
+
+    /// Optional TOTP parameters
     pub totp: Option<TotpSecret>,
 }
 
@@ -159,7 +204,7 @@ impl EntryView {
         self.title.expose_secret()
     }
 
-    /// Expose the primary secret (e.g. password)
+    /// Expose the primary secret
     ///
     /// # Security
     /// Use only at trusted boundaries (clipboard, autofill)
@@ -174,19 +219,42 @@ impl EntryView {
 /// Updates are validated at the boundary and applied only to an unlocked vault
 #[derive(Debug)]
 pub enum EntryUpdate {
-    SetTitle(String),            // Change title (encrypted at rest)
-    SetNote(Option<String>),     // Change note (encrypted at rest)
-    SetUsername(Option<String>), // Change username
-    SetSecret(String),           // Replace primary secret (password/token/base32 secret)
-    SetExtra(Option<Vec<u8>>),   // Replace extra binary blob
-    SetTotp(Option<TotpSecret>), // Replace TOTP parameters (only meaningful for `EntryType::Totp`)
-    /// Replace multiple fields at once (validated per field)
+    /// Change title
+    SetTitle(String),
+
+    /// Change note
+    SetNote(Option<String>),
+
+    /// Change username
+    SetUsername(Option<String>),
+
+    /// Replace primary secret
+    SetSecret(String),
+
+    /// Replace extra binary blob
+    SetExtra(Option<Vec<u8>>),
+
+    /// Replace TOTP parameters
+    SetTotp(Option<TotpSecret>),
+
+    /// Replace multiple fields at once
     Replace {
+        /// Optional replacement title
         title: Option<String>,
+
+        /// Optional replacement note
         note: Option<Option<String>>,
+
+        /// Optional replacement username
         username: Option<Option<String>>,
+
+        /// Optional replacement primary secret
         secret: Option<String>,
+
+        /// Optional replacement extra blob
         extra: Option<Option<Vec<u8>>>,
+
+        /// Optional replacement TOTP block
         totp: Option<Option<TotpSecret>>,
     },
 }
@@ -198,18 +266,32 @@ pub enum EntryUpdate {
 /// - All secrets are wiped on drop
 #[derive(Debug)]
 pub struct EntrySecret {
-    pub title: SecretString,            // User-visible title (encrypted at rest)
-    pub note: Option<SecretString>,     // Optional free-form note (encrypted at rest)
-    pub username: Option<SecretString>, // Optional username / identifier
-    pub secret: SecretString,           // Primary secret (password, token, base32 secret, etc.)
-    pub extra: Option<SecretBox<Zeroizing<Vec<u8>>>>, // Optional additional binary secret material
-    pub totp: Option<TotpSecret>,       // Optional TOTP parameters
+    /// User-visible title
+    pub title: SecretString,
+
+    /// Optional free-form note
+    pub note: Option<SecretString>,
+
+    /// Optional username / identifier
+    pub username: Option<SecretString>,
+
+    /// Primary secret (password, token, base32 secret, etc.)
+    pub secret: SecretString,
+
+    /// Optional additional binary secret material
+    pub extra: Option<SecretBox<Zeroizing<Vec<u8>>>>,
+
+    /// Optional TOTP parameters
+    pub totp: Option<TotpSecret>,
 }
 
 /// A complete vault entry
 #[derive(Debug)]
 pub struct VaultEntry {
+    /// Public metadata
     pub meta: EntryMetadata,
+
+    /// Encrypted-at-rest secret fields
     pub secret: EntrySecret,
 }
 
@@ -256,11 +338,15 @@ impl VaultEntry {
     }
 
     /// Create a new secure note entry
+    ///
+    /// # Security
+    /// The secure-note content is intentionally mirrored into both `note` and
+    /// `secret` for compatibility with existing flows
     pub fn new_secure_note(title: String, note: String) -> Result<Self, EntryError> {
         validate_title(&title)?;
         validate_note(&note)?;
 
-        let secret_value = note.clone();
+        let note_secret = SecretString::new(note.into());
 
         let entry = Self {
             meta: EntryMetadata {
@@ -269,9 +355,9 @@ impl VaultEntry {
             },
             secret: EntrySecret {
                 title: SecretString::new(title.into()),
-                note: Some(SecretString::new(note.into())),
+                note: Some(note_secret.clone()),
                 username: None,
-                secret: SecretString::new(secret_value.into()),
+                secret: note_secret,
                 extra: None,
                 totp: None,
             },
@@ -283,9 +369,13 @@ impl VaultEntry {
 
     /// Create a new TOTP entry
     ///
-    /// ## Design note
+    /// # Design
     /// The base32 secret is stored both in `secret.secret` and inside `totp.secret_b32`
-    /// to remain compatible with existing UI flows that expect a `secret` string
+    /// to remain compatible with existing UI flows that expect a primary secret string
+    ///
+    /// # Security
+    /// The mirrored secret is duplicated by cloning the secret wrapper instead
+    /// of re-materializing a plaintext `String`
     pub fn new_totp(
         title: String,
         totp: TotpSecret,
@@ -297,8 +387,6 @@ impl VaultEntry {
         }
         totp.validate()?;
 
-        let secret_b32 = totp.secret_b32.expose_secret().to_string();
-
         let entry = Self {
             meta: EntryMetadata {
                 id: Uuid::new_v4(),
@@ -308,7 +396,7 @@ impl VaultEntry {
                 title: SecretString::new(title.into()),
                 note: note.map(|n| SecretString::new(n.into())),
                 username: None,
-                secret: SecretString::new(secret_b32.into()),
+                secret: totp.secret_b32.clone(),
                 extra: None,
                 totp: Some(totp),
             },
@@ -331,7 +419,7 @@ impl VaultEntry {
     ///
     /// # Security
     /// - Clones `SecretString` fields intentionally so the UI owns its copy
-    /// - `extra` is copied into `Zeroizing<Vec<u8>>` (owned and wiped on drop)
+    /// - `extra` is copied into `Zeroizing<Vec<u8>>` and wiped on drop
     pub fn to_view(&self) -> EntryView {
         let extra_copy: Option<Zeroizing<Vec<u8>>> = self
             .secret
@@ -379,15 +467,20 @@ impl VaultEntry {
             EntryUpdate::SetSecret(s) => {
                 if self.meta.entry_type == EntryType::Password {
                     validate_password(&s)?;
+                    self.secret.secret = SecretString::new(s.into());
                 } else if self.meta.entry_type == EntryType::Totp {
                     // Keep both fields in sync for compatibility
                     let Some(ref mut t) = self.secret.totp else {
                         return Err(EntryError::InvalidType);
                     };
-                    t.secret_b32 = SecretString::new(s.clone().into());
+
+                    let secret_value = SecretString::new(s.into());
+                    t.secret_b32 = secret_value.clone();
                     t.validate()?;
+                    self.secret.secret = secret_value;
+                } else {
+                    self.secret.secret = SecretString::new(s.into());
                 }
-                self.secret.secret = SecretString::new(s.into());
             }
 
             EntryUpdate::SetExtra(e) => {
@@ -398,11 +491,12 @@ impl VaultEntry {
                 if self.meta.entry_type != EntryType::Totp {
                     return Err(EntryError::InvalidType);
                 }
+
                 if let Some(ref tsec) = t {
                     tsec.validate()?;
-                    self.secret.secret =
-                        SecretString::new(tsec.secret_b32.expose_secret().to_string().into());
+                    self.secret.secret = tsec.secret_b32.clone();
                 }
+
                 self.secret.totp = t;
             }
 
@@ -474,13 +568,31 @@ impl VaultEntry {
 // Manual serde via internal DTOs
 // -----------------------------------------------------------------------------
 
+/// Serializable DTO for [`TotpSecret`]
+///
+/// # Security
+/// This DTO necessarily materializes plaintext `String` fields
+/// while crossing the serde boundary \
+/// This is an unavoidable compatibility layer for JSON serialization
+/// and should remain confined to serialization/deserialization boundaries only
 #[derive(Debug, Serialize, Deserialize)]
 struct TotpSecretDto {
+    /// Optional issuer
     issuer: Option<String>,
+
+    /// Optional account name
     account_name: Option<String>,
+
+    /// Base32-encoded secret
     secret_b32: String,
+
+    /// Output digits
     digits: u8,
+
+    /// Period in seconds
     period_secs: u32,
+
+    /// HMAC algorithm
     algorithm: TotpAlgorithm,
 }
 
@@ -513,19 +625,40 @@ impl From<TotpSecretDto> for TotpSecret {
     }
 }
 
+/// Serializable DTO for [`EntrySecret`]
+///
+/// # Security
+/// This DTO necessarily materializes plaintext strings and bytes
+/// while crossing the serde boundary \
+/// The copies are deliberate and confined to serialization and deserialization boundaries
 #[derive(Debug, Serialize, Deserialize)]
 struct EntrySecretDto {
+    /// Title
     title: String,
+
+    /// Optional note
     note: Option<String>,
+
+    /// Optional username
     username: Option<String>,
+
+    /// Primary secret
     secret: String,
+
+    /// Optional binary blob
     extra: Option<Vec<u8>>,
+
+    /// Optional TOTP block
     totp: Option<TotpSecretDto>,
 }
 
+/// Serializable DTO for [`VaultEntry`]
 #[derive(Debug, Serialize, Deserialize)]
 struct VaultEntryDto {
+    /// Public metadata
     meta: EntryMetadata,
+
+    /// Secret fields
     secret: EntrySecretDto,
 }
 

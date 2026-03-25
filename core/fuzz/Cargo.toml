@@ -107,5 +107,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "decode_signed_backup_structured"
+path = "fuzz_targets/decode_signed_backup_structured.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

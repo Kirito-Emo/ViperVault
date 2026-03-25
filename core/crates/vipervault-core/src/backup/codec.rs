@@ -13,33 +13,37 @@
 //! [sig_len: u16 le]
 //! [signature: sig_len]
 //!
-//! Signature is computed over all bytes from magic up to the end of payload bytes
+//! The signature is computed over all bytes from `magic` up to the end of
+//! `payload_bytes`, excluding `sig_len` and `signature`
 //!
 //! # Security
-//! - Signature verification requires a password-derived signing key
-//! - The implementation does not distinguish tamper from wrong password (`AuthFailed`)
+//! - Signature verification requires a password-derived signing/verifying key
+//! - Verification failures are intentionally mapped to `AuthFailed` to avoid
+//!   distinguishing tampering from wrong-password conditions
+//! - Header bytes are integrity-critical but not secret
+//! - Parsing avoids unnecessary heap copies for header and signature fields
 
 use super::error::BackupError;
 use super::types::{
-    BACKUP_MAGIC, BACKUP_VERSION, BackupHeader, BackupKdfPolicy, MAX_BACKUP_PAYLOAD_LEN,
+    BackupHeader, BackupKdfPolicy, BACKUP_MAGIC, BACKUP_VERSION, MAX_BACKUP_PAYLOAD_LEN,
 };
 use crate::core::policy::PolicyContext;
 use crate::crypto::kdf::derive_master_key_from_password;
 use crate::memory::MasterPassword;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use rand::TryRng;
 use rand::rngs::SysRng;
+use rand::TryRng;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
 /// Encode a signed backup
 ///
 /// # Parameters
-/// - `policy`: session policy
+/// - `policy`: session/runtime policy
 /// - `password`: master password used to derive the signing key
-/// - `vault_container_bytes`: exact vault container bytes
-/// - `kdf`: backup KDF policy
+/// - `vault_container_bytes`: exact vault container bytes to sign
+/// - `kdf`: backup KDF policy embedded in the backup header
 ///
 /// # Errors
 /// Returns a coarse-grained [`BackupError`] on failure
@@ -91,20 +95,21 @@ pub fn encode_signed_backup(
 
     // Sign all bytes
     let signing_key = derive_backup_signing_key(password, &header)?;
-    let sig: Signature = signing_key.sign(&out);
+    let signature = signing_key.sign(&out);
 
     // Append signature
     out.extend_from_slice(&(64u16).to_le_bytes());
-    out.extend_from_slice(sig.to_bytes().as_slice());
+    out.extend_from_slice(signature.to_bytes().as_slice());
 
     Ok(out)
 }
 
-/// Decode a signed backup and return the vault container bytes
+/// Decode a signed backup and return the embedded vault container bytes
 ///
 /// # Security
-/// Returns `AuthFailed` if verification fails or the password is wrong \
-/// Denied by the centralized session/runtime policy
+/// - Denied by the centralized session/runtime policy
+/// - Returns `AuthFailed` if signature verification fails or the password is wrong
+/// - Avoids copying header/signature fields during parsing
 pub fn decode_signed_backup(
     policy: PolicyContext,
     password: &MasterPassword,
@@ -131,9 +136,10 @@ pub fn decode_signed_backup(
         return Err(BackupError::InvalidFormat);
     }
 
-    let header_json = read_vec(backup_bytes, &mut cursor, header_len)?;
+    let header_json = read_slice(backup_bytes, &mut cursor, header_len)?;
     let header: BackupHeader =
-        serde_json::from_slice(&header_json).map_err(|_| BackupError::Deserialize)?;
+        serde_json::from_slice(header_json).map_err(|_| BackupError::Deserialize)?;
+
     if header.version != BACKUP_VERSION {
         return Err(BackupError::UnsupportedVersion);
     }
@@ -147,19 +153,19 @@ pub fn decode_signed_backup(
         .try_into()
         .map_err(|_| BackupError::InvalidFormat)?;
 
-    let payload = read_vec(backup_bytes, &mut cursor, payload_len_usize)?;
+    let payload = read_slice(backup_bytes, &mut cursor, payload_len_usize)?;
 
     let sig_len = read_u16_le(backup_bytes, &mut cursor)?;
     if sig_len != 64 {
         return Err(BackupError::InvalidFormat);
     }
 
-    let sig_bytes = read_vec(backup_bytes, &mut cursor, 64)?;
+    let sig_bytes = read_slice(backup_bytes, &mut cursor, 64)?;
     if cursor != backup_bytes.len() {
         return Err(BackupError::InvalidFormat);
     }
 
-    let sig = Signature::from_slice(&sig_bytes).map_err(|_| BackupError::InvalidFormat)?;
+    let signature = Signature::from_slice(sig_bytes).map_err(|_| BackupError::InvalidFormat)?;
 
     // Verify signature over bytes before signature fields
     let signed_len = backup_bytes
@@ -167,12 +173,12 @@ pub fn decode_signed_backup(
         .checked_sub(2 + 64)
         .ok_or(BackupError::InvalidFormat)?;
 
-    let verifying_key: VerifyingKey = derive_backup_verifying_key(password, &header)?;
+    let verifying_key = derive_backup_verifying_key(password, &header)?;
     verifying_key
-        .verify(&backup_bytes[..signed_len], &sig)
+        .verify(&backup_bytes[..signed_len], &signature)
         .map_err(|_| BackupError::AuthFailed)?;
 
-    Ok(payload)
+    Ok(payload.to_vec())
 }
 
 /// Derive the Ed25519 signing key from the master password
@@ -180,11 +186,14 @@ pub fn decode_signed_backup(
 /// # Design
 /// Argon2id derives a master key using `header.salt` and `header.kdf` \
 /// HKDF-SHA256 expands that key into a 32-byte Ed25519 seed
+///
+/// # Security
+/// Wrong-password and derivation failures are mapped to `AuthFailed`
 fn derive_backup_signing_key(
     password: &MasterPassword,
     header: &BackupHeader,
 ) -> Result<SigningKey, BackupError> {
-    let mk = derive_master_key_from_password(
+    let master_key = derive_master_key_from_password(
         password,
         &header.salt,
         header.kdf.mem_kib,
@@ -193,20 +202,21 @@ fn derive_backup_signing_key(
     )
     .map_err(|_| BackupError::AuthFailed)?;
 
-    let seed = hkdf_expand_seed(mk.as_bytes())?;
+    let seed = hkdf_expand_seed(master_key.as_bytes())?;
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Derive the verifying key using the same password-based derivation path
+/// Derive the verifying key through the same password-based derivation path
 ///
 /// # Security
-/// This still derives the signing seed internally, but keeps the seed lifetime minimal
+/// This derives the signing seed internally and immediately reduces it to the
+/// public verifying key, while keeping the seed lifetime is kept minimal
 fn derive_backup_verifying_key(
     password: &MasterPassword,
     header: &BackupHeader,
 ) -> Result<VerifyingKey, BackupError> {
-    let signing = derive_backup_signing_key(password, header)?;
-    Ok(signing.verifying_key())
+    let signing_key = derive_backup_signing_key(password, header)?;
+    Ok(signing_key.verifying_key())
 }
 
 /// Expand a 32-byte Ed25519 seed from the master key using HKDF-SHA256
@@ -214,13 +224,19 @@ fn derive_backup_verifying_key(
 /// # Security
 /// The returned seed is wrapped in [`Zeroizing`] to reduce residual memory exposure
 fn hkdf_expand_seed(master_key: &[u8]) -> Result<Zeroizing<[u8; 32]>, BackupError> {
-    let hk = Hkdf::<Sha256>::new(None, master_key);
+    let hkdf = Hkdf::<Sha256>::new(None, master_key);
     let mut okm = Zeroizing::new([0u8; 32]);
-    hk.expand(b"vipervault-backup-ed25519-seed", &mut okm[..])
+
+    hkdf.expand(b"vipervault-backup-ed25519-seed", &mut okm[..])
         .map_err(|_| BackupError::Serialize)?;
+
     Ok(okm)
 }
 
+/// Read exactly `N` bytes and advance the cursor
+///
+/// # Errors
+/// Returns [`BackupError::InvalidFormat`] on overflow or truncation
 fn read_exact<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], BackupError> {
     let end = cursor.checked_add(N).ok_or(BackupError::InvalidFormat)?;
     if end > bytes.len() {
@@ -230,28 +246,41 @@ fn read_exact<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N
     let mut out = [0u8; N];
     out.copy_from_slice(&bytes[*cursor..end]);
     *cursor = end;
+
     Ok(out)
 }
 
-fn read_u16_le(bytes: &[u8], cursor: &mut usize) -> Result<u16, BackupError> {
-    Ok(u16::from_le_bytes(read_exact::<2>(bytes, cursor)?))
-}
-
-fn read_u32_le(bytes: &[u8], cursor: &mut usize) -> Result<u32, BackupError> {
-    Ok(u32::from_le_bytes(read_exact::<4>(bytes, cursor)?))
-}
-
-fn read_u64_le(bytes: &[u8], cursor: &mut usize) -> Result<u64, BackupError> {
-    Ok(u64::from_le_bytes(read_exact::<8>(bytes, cursor)?))
-}
-
-fn read_vec(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, BackupError> {
+/// Read an arbitrary borrowed slice and advance the cursor
+///
+/// # Errors
+/// Returns [`BackupError::InvalidFormat`] on overflow or truncation
+fn read_slice<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    len: usize,
+) -> Result<&'a [u8], BackupError> {
     let end = cursor.checked_add(len).ok_or(BackupError::InvalidFormat)?;
     if end > bytes.len() {
         return Err(BackupError::InvalidFormat);
     }
 
-    let out = bytes[*cursor..end].to_vec();
+    let out = &bytes[*cursor..end];
     *cursor = end;
+
     Ok(out)
+}
+
+/// Read a little-endian `u16`
+fn read_u16_le(bytes: &[u8], cursor: &mut usize) -> Result<u16, BackupError> {
+    Ok(u16::from_le_bytes(read_exact::<2>(bytes, cursor)?))
+}
+
+/// Read a little-endian `u32`
+fn read_u32_le(bytes: &[u8], cursor: &mut usize) -> Result<u32, BackupError> {
+    Ok(u32::from_le_bytes(read_exact::<4>(bytes, cursor)?))
+}
+
+/// Read a little-endian `u64`
+fn read_u64_le(bytes: &[u8], cursor: &mut usize) -> Result<u64, BackupError> {
+    Ok(u64::from_le_bytes(read_exact::<8>(bytes, cursor)?))
 }

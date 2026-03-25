@@ -10,22 +10,25 @@
 //! # Security
 //! - Denied in decoy mode
 //! - Denied under anti-debug soft policy
-//! - Does not distinguish wrong password vs tampering (`AuthFailed`)
+//! - Does not distinguish wrong password from tampering (`AuthFailed`)
+//! - Plaintext JSON produced for unlock is placed into a protected buffer
+//!   immediately after serialization
 
-use super::ImportError;
 use super::signed::import_vipervault_from_signed_backup;
-use crate::core::VaultLockManager;
+use super::ImportError;
 use crate::core::auth_gate::AuthGate;
 use crate::core::policy::PolicyContext;
 use crate::core::unlock::unlock_session_gated;
+use crate::core::VaultLockManager;
 use crate::memory::MasterPassword;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 /// Import a signed backup blob and unlock the manager
 ///
 /// # Design
 /// - Reuses the signed import primitive
-/// - Performs an actual decrypt attempt before unlocking (integrity/auth check)
+/// - Performs an actual decrypt attempt before unlocking as an integrity/authentication check
 ///
 /// # Security
 /// - Does not leak wrong password vs tampering
@@ -49,8 +52,9 @@ pub async fn import_signed_vault_and_unlock(
         .await
         .map_err(|_| ImportError::AuthFailed)?;
 
-    let plaintext_json =
-        serde_json::to_vec(session.payload()).map_err(|_| ImportError::InvalidFormat)?;
+    let plaintext_json = Zeroizing::new(
+        serde_json::to_vec(session.payload()).map_err(|_| ImportError::InvalidFormat)?,
+    );
 
     manager
         .unlock_with_plaintext_json(plaintext_json, timeout)

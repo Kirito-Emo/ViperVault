@@ -14,8 +14,8 @@
 //! - `UnlockOutcome::Decoy` should trigger stricter restrictions in the UI
 //! - The session is an in-memory representation; persistence must remain encrypted
 
-use crate::vault::VaultPayload;
 use crate::vault::duress::UnlockOutcome;
+use crate::vault::VaultPayload;
 
 /// An unlocked vault session
 #[derive(Debug)]
@@ -65,7 +65,7 @@ impl UnlockedVaultSession {
     /// Policy: allow sharing secrets (e.g. OTPAuth export)
     ///
     /// # Notes
-    /// In decoy mode, exporting is often counterproductive; the safe default is deny
+    /// In decoy mode, exporting is often counterproductive; the safe default is denied
     pub fn allow_secret_sharing(&self) -> bool {
         !self.is_decoy()
     }

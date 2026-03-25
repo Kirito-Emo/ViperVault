@@ -11,7 +11,7 @@
 //! Both ciphertexts are authenticated using the raw header bytes as AEAD AAD
 //!
 //! # Security
-//! - Decryption failures are mapped to `VaultParseError::AuthFailed` to avoid oracle behavior
+//! - Decryption failures are mapped to `VaultParseError::AuthFailed` to avoid oracle behaviour
 
 use super::error::VaultParseError;
 use super::types::{

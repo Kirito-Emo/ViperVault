@@ -7,23 +7,24 @@
 //! - Denied in decoy policy
 //! - Denied under anti-debug soft policy
 //! - Not supported for duress-enabled vaults (fallback to password unlock)
-//! - Master key is held in `KeyMaterial` (zeroized on drop)
+//! - Master key is held in [`crate::memory::KeyMaterial`] and zeroized on drop
+//! - Decrypted plaintext JSON is kept in a protected buffer until handed to the
+//!   runtime lock manager
 
 use crate::biometrics::{BiometricBackend, BiometricError};
-use crate::core::VaultLockManager;
 use crate::core::policy::PolicyContext;
+use crate::core::VaultLockManager;
 use crate::crypto::aead::decrypt_xchacha20poly1305;
-use crate::memory::KeyMaterial;
+use crate::memory::{KeyMaterial, SecretBytes};
 use crate::vault::{ParsedVaultFile, StorageMode};
 use std::time::Duration;
-use zeroize::Zeroizing;
 
 impl VaultLockManager {
-    /// Unlock with a provided master key (biometrics path)
+    /// Unlock with a provided master key through the biometric path
     ///
     /// # Security
     /// - Only supports non-duress encrypted vaults
-    /// - Uses `header_bytes` as AAD to prevent header tampering
+    /// - Uses `header_bytes` as AEAD AAD to prevent header tampering
     /// - Denied by the centralized session/runtime policy
     pub async fn unlock_with_master_key(
         &self,
@@ -36,12 +37,13 @@ impl VaultLockManager {
             return Err(BiometricError::PolicyDenied);
         }
 
-        let pt = unlock_vault_to_plaintext_json_with_master_key(parsed, master_key)?;
-        self.unlock_with_plaintext_json(pt.to_vec(), timeout).await;
+        let plaintext_json = unlock_vault_to_plaintext_json_with_master_key(parsed, master_key)?;
+        self.unlock_with_plaintext_json(plaintext_json, timeout)
+            .await;
         Ok(())
     }
 
-    /// High-level biometric unlock
+    /// Perform a high-level biometric unlock
     ///
     /// # Security
     /// - Denied by the centralized session/runtime policy
@@ -73,16 +75,17 @@ impl VaultLockManager {
 /// # Security
 /// - Only supports encrypted vaults
 /// - Not supported for duress-enabled vaults
-/// - Maps failures to `AuthFailed` (no oracle)
+/// - Maps failures to `AuthFailed` to avoid creating an oracle
+/// - Returns the plaintext in a protected buffer
 fn unlock_vault_to_plaintext_json_with_master_key(
     parsed: &ParsedVaultFile,
     master_key: &KeyMaterial,
-) -> Result<Zeroizing<Vec<u8>>, BiometricError> {
+) -> Result<SecretBytes, BiometricError> {
     if parsed.mode != StorageMode::Encrypted {
         return Err(BiometricError::AuthFailed);
     }
 
-    // Duress-enabled vaults must use password flow to preserve coercion semantics
+    // Duress-enabled vaults must use the password flow to preserve coercion semantics
     if parsed.header.duress.is_some() {
         return Err(BiometricError::NotSupported);
     }
