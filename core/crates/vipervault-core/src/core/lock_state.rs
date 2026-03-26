@@ -7,9 +7,12 @@
 //! - Decrypted vault contents are kept in memory only while unlocked
 //! - Plaintext JSON bytes are wrapped in [`crate::memory::SecretBytes`] so they
 //!   are zeroized on lock, timeout, replacement, or drop
-//! - Auto-lock uses generation tracking to prevent stale tasks from affecting
-//!   a newer unlock cycle
+//! - Auto-lock uses generation tracking to prevent stale tasks from affecting a
+//!   newer unlock cycle
+//! - Unlocked state also carries session-security metadata so convenience
+//!   unlocks can be distinguished from strong authentication
 
+use crate::core::session::{AuthenticationStrength, RuntimeSecurityEvent, SensitiveOperation};
 use crate::memory::SecretBytes;
 use crate::vault::VaultPayload;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,15 +29,23 @@ use zeroize::Zeroizing;
 /// - In unlocked state the plaintext vault JSON is retained in memory
 /// - The plaintext buffer is wrapped in [`crate::memory::SecretBytes`] so the
 ///   underlying allocation is wiped on lock, timeout, replacement or drop
+/// - Unlocked state also tracks the session authentication strength and whether
+///   strong re-authentication has been explicitly required
 #[derive(Debug)]
 pub enum VaultState {
     /// Vault is locked; no decrypted secrets are retained in memory
     Locked,
 
-    /// Vault is unlocked; decrypted payload JSON is held in memory
+    /// Vault is unlocked; decrypted payload JSON is held in memory together
+    /// with session-security metadata
     Unlocked {
         /// Protected plaintext vault JSON bytes
         plaintext_json: SecretBytes,
+        /// Authentication strength that established the current unlocked session
+        auth_strength: AuthenticationStrength,
+        /// Sticky flag indicating that strong re-authentication is required
+        /// before sensitive operations may proceed
+        strong_reauth_required: bool,
     },
 }
 
@@ -103,8 +114,33 @@ impl VaultLockManager {
     /// - The plaintext is converted into a protected buffer immediately
     /// - Any previously unlocked state is dropped and zeroized
     /// - A fresh generation invalidates stale timer tasks from prior cycles
+    ///
+    /// # Design
+    /// This compatibility entry point opens a session with [`AuthenticationStrength::Strong`]
     pub async fn unlock_with_plaintext_json<B>(&self, plaintext_json: B, timeout: Duration)
     where
+        B: Into<SecretBytes>,
+    {
+        // Preserve the existing API and default it to strong authentication
+        self.unlock_with_plaintext_json_with_strength(
+            plaintext_json,
+            timeout,
+            AuthenticationStrength::Strong,
+        )
+            .await;
+    }
+
+    /// Unlock the vault with an explicit authentication strength
+    ///
+    /// # Security
+    /// The current unlocked state records the session assurance level so
+    /// sensitive operations can require strong re-authentication when needed
+    pub async fn unlock_with_plaintext_json_with_strength<B>(
+        &self,
+        plaintext_json: B,
+        timeout: Duration,
+        auth_strength: AuthenticationStrength,
+    ) where
         B: Into<SecretBytes>,
     {
         let generation = self.next_generation();
@@ -112,7 +148,13 @@ impl VaultLockManager {
 
         {
             let mut state = self.state.lock().await;
-            *state = VaultState::Unlocked { plaintext_json };
+            *state = VaultState::Unlocked {
+                plaintext_json,
+                auth_strength,
+                // Non-strong sessions start with strong re-authentication required
+                // for sensitive follow-up operations
+                strong_reauth_required: !auth_strength.is_strong(),
+            };
         }
 
         self.restart_auto_lock(timeout, generation).await;
@@ -128,10 +170,104 @@ impl VaultLockManager {
     pub async fn get_payload(&self) -> Option<VaultPayload> {
         let state = self.state.lock().await;
         match &*state {
-            VaultState::Unlocked { plaintext_json } => {
+            VaultState::Unlocked { plaintext_json, .. } => {
                 serde_json::from_slice::<VaultPayload>(plaintext_json.as_slice()).ok()
             }
             VaultState::Locked => None,
+        }
+    }
+
+    /// Return the authentication strength of the current unlocked session
+    pub async fn current_authentication_strength(&self) -> Option<AuthenticationStrength> {
+        let state = self.state.lock().await;
+        match &*state {
+            VaultState::Unlocked { auth_strength, .. } => Some(*auth_strength),
+            VaultState::Locked => None,
+        }
+    }
+
+    /// Return `true` when strong re-authentication is currently required before
+    /// sensitive operations may proceed
+    pub async fn strong_reauth_required(&self) -> Option<bool> {
+        let state = self.state.lock().await;
+        match &*state {
+            VaultState::Unlocked {
+                strong_reauth_required,
+                ..
+            } => Some(*strong_reauth_required),
+            VaultState::Locked => None,
+        }
+    }
+
+    /// Mark the current unlocked session as requiring strong re-authentication
+    ///
+    /// # Security
+    /// This is intended for future runtime events such as backgrounding,
+    /// device-lock transitions, or quick-unlock invalidation
+    pub async fn mark_strong_reauth_required(&self) -> bool {
+        let mut state = self.state.lock().await;
+        match &mut *state {
+            VaultState::Unlocked {
+                strong_reauth_required,
+                ..
+            } => {
+                *strong_reauth_required = true;
+                true
+            }
+            VaultState::Locked => false,
+        }
+    }
+
+    /// Clear the strong re-authentication requirement for the current unlocked session
+    ///
+    /// # Security
+    /// Callers should use this only after an explicit strong re-authentication
+    /// step has completed successfully
+    pub async fn clear_strong_reauth_requirement(&self) -> bool {
+        let mut state = self.state.lock().await;
+        match &mut *state {
+            VaultState::Unlocked {
+                strong_reauth_required,
+                ..
+            } => {
+                *strong_reauth_required = false;
+                true
+            }
+            VaultState::Locked => false,
+        }
+    }
+
+    /// Return `true` when the current unlocked session should require strong
+    /// re-authentication for the given sensitive operation
+    pub async fn requires_strong_reauth_for(&self, operation: SensitiveOperation) -> Option<bool> {
+        let state = self.state.lock().await;
+        match &*state {
+            VaultState::Unlocked {
+                auth_strength,
+                strong_reauth_required,
+                ..
+            } => Some(
+                *strong_reauth_required
+                    || (!auth_strength.is_strong() && operation.requires_strong_reauth()),
+            ),
+            VaultState::Locked => None,
+        }
+    }
+
+    /// Apply a runtime security event to the current unlocked session
+    ///
+    /// # Security
+    /// Some events force an immediate full lock, while others preserve the
+    /// unlocked state but require strong re-authentication before sensitive
+    /// follow-up actions
+    pub async fn handle_runtime_security_event(&self, event: RuntimeSecurityEvent) {
+        if event.forces_lock() {
+            self.lock().await;
+            return;
+        }
+
+        if event.requires_strong_reauth() {
+            let _ = self.mark_strong_reauth_required().await;
         }
     }
 
@@ -240,7 +376,7 @@ impl VaultLockManager {
         let mut state = self.state.lock().await;
 
         match &mut *state {
-            VaultState::Unlocked { plaintext_json } => {
+            VaultState::Unlocked { plaintext_json, .. } => {
                 let mut payload: VaultPayload =
                     serde_json::from_slice(plaintext_json.as_slice()).ok()?;
 
@@ -266,7 +402,7 @@ impl VaultLockManager {
         let state = self.state.lock().await;
 
         match &*state {
-            VaultState::Unlocked { plaintext_json } => {
+            VaultState::Unlocked { plaintext_json, .. } => {
                 let payload: VaultPayload =
                     serde_json::from_slice(plaintext_json.as_slice()).ok()?;
                 Some(f(&payload))
@@ -280,5 +416,129 @@ impl Default for VaultLockManager {
     /// Create a new locked vault manager
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VaultLockManager;
+    use crate::core::session::{AuthenticationStrength, RuntimeSecurityEvent, SensitiveOperation};
+    use crate::vault::VaultPayload;
+    use std::time::Duration;
+
+    /// The compatibility unlock path must still create a strong session
+    #[tokio::test]
+    async fn compatibility_unlock_defaults_to_strong_authentication() {
+        let manager = VaultLockManager::new();
+
+        manager
+            .unlock_with_plaintext_json(
+                serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize"),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        assert_eq!(
+            manager.current_authentication_strength().await,
+            Some(AuthenticationStrength::Strong)
+        );
+        assert_eq!(manager.strong_reauth_required().await, Some(false));
+        assert_eq!(
+            manager
+                .requires_strong_reauth_for(SensitiveOperation::Export)
+                .await,
+            Some(false)
+        );
+    }
+
+    /// Explicit biometric unlock must preserve the weaker session assurance and
+    /// require strong re-authentication for sensitive operations
+    #[tokio::test]
+    async fn biometric_session_metadata_is_preserved() {
+        let manager = VaultLockManager::new();
+
+        manager
+            .unlock_with_plaintext_json_with_strength(
+                serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize"),
+                Duration::from_secs(60),
+                AuthenticationStrength::Biometric,
+            )
+            .await;
+
+        assert_eq!(
+            manager.current_authentication_strength().await,
+            Some(AuthenticationStrength::Biometric)
+        );
+        assert_eq!(manager.strong_reauth_required().await, Some(true));
+        assert_eq!(
+            manager
+                .requires_strong_reauth_for(SensitiveOperation::CopySecret)
+                .await,
+            Some(true)
+        );
+    }
+
+    /// Sticky strong re-authentication requirements must be settable and
+    /// clearable on an unlocked session
+    #[tokio::test]
+    async fn strong_reauth_requirement_can_be_set_and_cleared() {
+        let manager = VaultLockManager::new();
+
+        manager
+            .unlock_with_plaintext_json(
+                serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize"),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        assert_eq!(manager.strong_reauth_required().await, Some(false));
+        assert!(manager.mark_strong_reauth_required().await);
+        assert_eq!(manager.strong_reauth_required().await, Some(true));
+        assert!(manager.clear_strong_reauth_requirement().await);
+        assert_eq!(manager.strong_reauth_required().await, Some(false));
+    }
+
+    /// Backgrounding should preserve the unlocked session but require strong re-authentication
+    #[tokio::test]
+    async fn background_event_marks_strong_reauth_required() {
+        let manager = VaultLockManager::new();
+
+        manager
+            .unlock_with_plaintext_json(
+                serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize"),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        manager
+            .handle_runtime_security_event(RuntimeSecurityEvent::AppBackgrounded)
+            .await;
+
+        assert!(
+            manager.get_payload().await.is_some(),
+            "vault should remain unlocked after background event"
+        );
+        assert_eq!(manager.strong_reauth_required().await, Some(true));
+    }
+
+    /// Device-lock style events should immediately relock the vault
+    #[tokio::test]
+    async fn device_locked_event_forces_full_lock() {
+        let manager = VaultLockManager::new();
+
+        manager
+            .unlock_with_plaintext_json(
+                serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize"),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        manager
+            .handle_runtime_security_event(RuntimeSecurityEvent::DeviceLocked)
+            .await;
+
+        assert!(manager.get_payload().await.is_none());
+        assert!(manager.current_authentication_strength().await.is_none());
+        assert!(manager.strong_reauth_required().await.is_none());
     }
 }

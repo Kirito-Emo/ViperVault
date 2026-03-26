@@ -29,6 +29,12 @@ pub enum EntryError {
     #[error("duplicate entry id")]
     DuplicateEntry,
 
+    #[error("reauthentication required")]
+    ReauthRequired,
+
     #[error("invalid entry type")]
     InvalidType,
+
+    #[error("entry contains invalid or inconsistent data")]
+    InvalidData,
 }

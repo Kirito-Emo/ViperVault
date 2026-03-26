@@ -451,12 +451,24 @@ mod tests {
         assert_eq!(lock_path, dir.path().join("vault.bin.lock"));
     }
 
-    /// Invalid paths must be rejected when no parent directory is available
+    /// Invalid lock-path inputs must be rejected, while a plain relative
+    /// file name remains a valid vault path
     #[test]
     fn lock_path_rejects_invalid_paths() {
-        let path = Path::new("vault.bin");
-        let err = lock_path_for(path).unwrap_err();
+        let relative = lock_path_for(Path::new("vault.bin")).expect("relative file name is valid");
+        assert_eq!(relative, PathBuf::from("vault.bin.lock"));
+
+        let err = lock_path_for(Path::new("")).unwrap_err();
         assert!(matches!(err, VaultStorageError::InvalidPath));
+
+        let err = lock_path_for(Path::new(".")).unwrap_err();
+        assert!(matches!(err, VaultStorageError::InvalidPath));
+
+        #[cfg(unix)]
+        {
+            let err = lock_path_for(Path::new("/")).unwrap_err();
+            assert!(matches!(err, VaultStorageError::InvalidPath));
+        }
     }
 
     /// Shared lock acquisition must create the lock file on demand

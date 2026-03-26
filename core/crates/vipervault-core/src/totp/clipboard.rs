@@ -7,12 +7,15 @@
 //! - OTP is generated on demand
 //! - Formatted OTP is handled as `Zeroizing<String>`
 //! - Clipboard is cleared automatically after timeout by `ClipboardGuard`
-//! - Clipboard is denied under restrictive runtime policy
+//!
+//! # Design
+//! This module provides a low-level clipboard primitive only \
+//! Session policy, lock-state checks and re-authentication enforcement must
+//! happen in a manager-aware boundary before calling into this function
 
 use super::engine::totp_generate_formatted;
 use super::error::TotpError;
 use crate::clipboard::guard::ClipboardGuard;
-use crate::core::allow_clipboard_under_soft_policy;
 use crate::entries::types::TotpSecret;
 use secrecy::SecretString;
 use std::time::Duration;
@@ -30,7 +33,8 @@ pub const DEFAULT_OTP_CLIPBOARD_TIMEOUT_SECS: u64 = 30;
 /// - `timeout`: optional timeout override
 ///
 /// ## Security notes
-/// - Denied if restrictive runtime policy is active
+/// - This function is a low-level primitive and does not enforce session policy
+/// - Callers must perform lock-state and re-auth checks before invoking it
 /// - Avoid logging or persisting the generated OTP
 pub fn totp_generate_and_copy_to_clipboard(
     totp: &TotpSecret,
@@ -38,10 +42,6 @@ pub fn totp_generate_and_copy_to_clipboard(
     clipboard: &mut ClipboardGuard,
     timeout: Option<Duration>,
 ) -> Result<(), TotpError> {
-    if !allow_clipboard_under_soft_policy() {
-        return Err(TotpError::InvalidParams);
-    }
-
     let formatted: Zeroizing<String> = totp_generate_formatted(totp, unix_time_secs)?;
     let timeout = timeout.unwrap_or(Duration::from_secs(DEFAULT_OTP_CLIPBOARD_TIMEOUT_SECS));
 

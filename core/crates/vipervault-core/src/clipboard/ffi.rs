@@ -4,30 +4,31 @@
 //! Clipboard FFI bindings (platform bridge)
 //!
 //! # Security
-//! - Minimal `extern "C"` API for mobile/desktop bridges
+//! - Minimal `extern "C"` API for platform bridges
 //! - Clipboard is an untrusted sink
 //! - Secret lifetime is minimized
-//! - Under anti-debug *soft policy*, clipboard operations are denied
 //! - No panics are allowed to cross the FFI boundary
 //! - Callbacks return `i32` error codes (`VV_OK == 0`)
-//! - This allows the core to detect failures and enforce policy coherently
+//!
+//! # Design
+//! This module is a low-level technical bridge only \
+//! Session policy, lock-state checks and re-authentication enforcement must be
+//! performed in manager-aware boundaries before invoking this FFI layer
 
 use crate::clipboard::guard::{ClipboardBackend, ClipboardGuard};
-use crate::core::allow_clipboard_under_soft_policy;
 use secrecy::SecretString;
 use std::ffi::c_void;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::time::Duration;
 
 /// FFI error codes
 pub const VV_OK: i32 = 0;
 pub const VV_ERR_NULL: i32 = -1;
-pub const VV_ERR_DENIED: i32 = -2;
-pub const VV_ERR_UTF8: i32 = -3;
-pub const VV_ERR_PANIC: i32 = -4;
-pub const VV_ERR_BACKEND: i32 = -5;
-pub const VV_ERR_BOUNDS: i32 = -6;
+pub const VV_ERR_UTF8: i32 = -2;
+pub const VV_ERR_PANIC: i32 = -3;
+pub const VV_ERR_BACKEND: i32 = -4;
+pub const VV_ERR_BOUNDS: i32 = -5;
 
 /// Maximum clipboard bytes accepted from the host (anti-DoS bound)
 pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024; // 1 MiB
@@ -188,8 +189,10 @@ pub unsafe extern "C" fn vv_clipboard_guard_cancel(handle: *mut VvClipboardGuard
 
 /// Copy a secret to clipboard with auto-clear
 ///
-/// # Soft policy
-/// If a debugger is detected, this operation is denied
+/// # Design
+/// This function is intentionally a low-level technical bridge only \
+/// It does not enforce session policy, lock-state checks or re-authentication \
+/// Callers must perform those checks before invoking this function
 ///
 /// # Safety
 /// - `handle` must be a non-null pointer previously returned by `vv_clipboard_guard_new`
@@ -212,11 +215,7 @@ pub unsafe extern "C" fn vv_clipboard_guard_copy_with_timeout(
             return VV_ERR_BOUNDS;
         }
 
-        if !allow_clipboard_under_soft_policy() {
-            return VV_ERR_DENIED;
-        }
-
-        // SAFETY: The caller guarantees `secret_ptr` is valid for `secret_len` bytes
+        // SAFETY: The caller guarantees `secret_ptr` is readable for `secret_len` bytes
         let bytes = unsafe { std::slice::from_raw_parts(secret_ptr, secret_len) };
         let s = match std::str::from_utf8(bytes) {
             Ok(v) => v,

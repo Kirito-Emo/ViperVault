@@ -6,13 +6,16 @@
 //! # Security
 //! - Denied in decoy policy
 //! - Denied under restrictive runtime policy
-//! - Not supported for duress-enabled vaults (fallback to password unlock)
+//! - Not supported for duress-enabled vaults
 //! - Master key is held in [`crate::memory::KeyMaterial`] and zeroized on drop
 //! - Decrypted plaintext JSON is kept in a protected buffer until handed to the
 //!   runtime lock manager
+//! - Biometric unlock establishes a biometric-strength session rather than a
+//!   strong master-password session
 
 use crate::biometrics::{BiometricBackend, BiometricError};
 use crate::core::policy::PolicyContext;
+use crate::core::session::AuthenticationStrength;
 use crate::core::VaultLockManager;
 use crate::crypto::aead::decrypt_xchacha20poly1305;
 use crate::memory::{KeyMaterial, SecretBytes};
@@ -39,7 +42,12 @@ impl VaultLockManager {
         }
 
         let plaintext_json = unlock_vault_to_plaintext_json_with_master_key(parsed, master_key)?;
-        self.unlock_with_plaintext_json(plaintext_json, timeout)
+        // Biometric-path unlocks should not masquerade as strong master-password sessions
+        self.unlock_with_plaintext_json_with_strength(
+            plaintext_json,
+            timeout,
+            AuthenticationStrength::Biometric,
+        )
             .await;
         Ok(())
     }

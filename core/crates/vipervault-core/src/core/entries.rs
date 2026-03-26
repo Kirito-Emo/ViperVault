@@ -5,11 +5,18 @@
 //!
 //! # Security model
 //! The manager stores decrypted data as `plaintext_json` (`Zeroizing<Vec<u8>>`)
-//! Operations deserialize the payload temporarily, mutate it, and immediately
-//! re-serialize back to `plaintext_json` to minimize secret exposure
+//! Operations deserialize the payload temporarily, mutate it and immediately
+//! re-serialize back to `plaintext_json` to minimize secret exposure \
+//! Sensitive follow-up operations can require strong re-authentication
+//! depending on the current session
 
+use crate::clipboard::guard::ClipboardGuard;
+use crate::core::session::SensitiveOperation;
 use crate::core::VaultLockManager;
 use crate::entries::{EntryError, EntrySummary, EntryUpdate, EntryView, VaultEntry};
+use crate::totp::clipboard::totp_generate_and_copy_to_clipboard;
+use secrecy::SecretString;
+use std::time::Duration;
 use uuid::Uuid;
 
 impl VaultLockManager {
@@ -136,5 +143,189 @@ impl VaultLockManager {
         })
         .await
         .unwrap_or(Err(EntryError::VaultLocked))
+    }
+
+    /// Retrieve a full decrypted entry view for a specific sensitive operation
+    ///
+    /// # Security
+    /// This method enforces the current strong re-authentication requirement for
+    /// exposure-prone operations such as secret reveal or secret copy
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    pub async fn get_entry_for_operation(
+        &self,
+        entry_id: Uuid,
+        operation: SensitiveOperation,
+    ) -> Result<EntryView, EntryError> {
+        match self.requires_strong_reauth_for(operation).await {
+            None => Err(EntryError::VaultLocked),
+            Some(true) => Err(EntryError::ReauthRequired),
+            Some(false) => self.get_entry(entry_id).await,
+        }
+    }
+
+    /// Reveal the secret of an entry through a manager-aware sensitive boundary
+    ///
+    /// # Security
+    /// - Requires the vault to be unlocked
+    /// - Enforces strong re-authentication for secret reveal
+    /// - Returns a wrapped secret rather than a raw plaintext string
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `InvalidType` if the selected entry does not expose a direct secret
+    pub async fn reveal_entry_secret(&self, entry_id: Uuid) -> Result<SecretString, EntryError> {
+        self.reveal_entry_secret_for_operation(entry_id, SensitiveOperation::RevealSecret)
+            .await
+    }
+
+    /// Reveal the secret of an entry for a specific sensitive operation
+    ///
+    /// # Design
+    /// This keeps the operation explicit so callers can distinguish
+    /// among reveal, copy and other exposure-prone semantics while sharing
+    /// the same enforcement path
+    ///
+    /// # Security
+    /// The returned secret is copied into a fresh `SecretString` wrapper
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `InvalidType` if the selected entry does not expose a direct secret
+    pub async fn reveal_entry_secret_for_operation(
+        &self,
+        entry_id: Uuid,
+        operation: SensitiveOperation,
+    ) -> Result<SecretString, EntryError> {
+        let entry = self.get_entry_for_operation(entry_id, operation).await?;
+
+        let secret = entry.expose_secret();
+        if secret.is_empty() {
+            return Err(EntryError::InvalidType);
+        }
+
+        Ok(SecretString::new(secret.to_owned().into()))
+    }
+
+    /// Copy the secret of an entry to clipboard through a manager-aware
+    /// sensitive boundary
+    ///
+    /// # Security
+    /// - Requires the vault to be unlocked
+    /// - Enforces strong re-authentication for secret copy
+    /// - Uses `ClipboardGuard` for timeout-based auto-clear
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `InvalidType` if the selected entry does not expose a direct secret
+    pub async fn copy_entry_secret(
+        &self,
+        entry_id: Uuid,
+        clipboard: &mut ClipboardGuard,
+        timeout: Duration,
+    ) -> Result<(), EntryError> {
+        self.copy_entry_secret_for_operation(
+            entry_id,
+            SensitiveOperation::CopySecret,
+            clipboard,
+            timeout,
+        )
+            .await
+    }
+
+    /// Copy the secret of an entry for a specific sensitive operation
+    ///
+    /// # Design
+    /// This shares the same manager-aware enforcement path used by reveal, while
+    /// keeping copy semantics explicit for policy refinement
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `InvalidType` if the selected entry does not expose a direct secret
+    pub async fn copy_entry_secret_for_operation(
+        &self,
+        entry_id: Uuid,
+        operation: SensitiveOperation,
+        clipboard: &mut ClipboardGuard,
+        timeout: Duration,
+    ) -> Result<(), EntryError> {
+        let secret = self
+            .reveal_entry_secret_for_operation(entry_id, operation)
+            .await?;
+
+        clipboard.copy_with_timeout(&secret, timeout);
+        Ok(())
+    }
+
+    /// Copy the current TOTP code of an entry to clipboard through a
+    /// manager-aware sensitive boundary
+    ///
+    /// # Security
+    /// - Requires the vault to be unlocked
+    /// - Enforces strong re-authentication for TOTP copy
+    /// - Uses `ClipboardGuard` for timeout-based auto-clear
+    /// - Delegates OTP generation to the low-level TOTP primitive only after
+    ///   session checks have succeeded
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `InvalidType` if the selected entry is not a TOTP entry
+    /// - `InvalidData` if the stored TOTP configuration is inconsistent
+    pub async fn copy_entry_totp(
+        &self,
+        entry_id: Uuid,
+        unix_time_secs: u64,
+        clipboard: &mut ClipboardGuard,
+        timeout: Option<Duration>,
+    ) -> Result<(), EntryError> {
+        self.copy_entry_totp_for_operation(
+            entry_id,
+            SensitiveOperation::CopyTotp,
+            unix_time_secs,
+            clipboard,
+            timeout,
+        )
+            .await
+    }
+
+    /// Copy the current TOTP code of an entry for a specific sensitive operation
+    ///
+    /// # Design
+    /// This keeps the operation explicit so callers can distinguish
+    /// between TOTP reveal/copy semantics while sharing the same enforcement
+    /// path
+    ///
+    /// # Errors
+    /// - `VaultLocked` if the vault is locked
+    /// - `EntryNotFound` if the entry does not exist
+    /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `InvalidType` if the selected entry is not a TOTP entry
+    /// - `InvalidData` if the stored TOTP configuration is inconsistent
+    pub async fn copy_entry_totp_for_operation(
+        &self,
+        entry_id: Uuid,
+        operation: SensitiveOperation,
+        unix_time_secs: u64,
+        clipboard: &mut ClipboardGuard,
+        timeout: Option<Duration>,
+    ) -> Result<(), EntryError> {
+        let entry = self.get_entry_for_operation(entry_id, operation).await?;
+        let totp = entry.totp.as_ref().ok_or(EntryError::InvalidType)?;
+
+        totp_generate_and_copy_to_clipboard(totp, unix_time_secs, clipboard, timeout)
+            .map_err(|_| EntryError::InvalidData)
     }
 }
