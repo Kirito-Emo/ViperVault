@@ -23,7 +23,7 @@
 
 use vipervault_core::backup::types::{BACKUP_MAGIC, BACKUP_VERSION, MAX_BACKUP_PAYLOAD_LEN};
 use vipervault_core::backup::{
-    decode_signed_backup, encode_signed_backup, BackupError, BackupKdfPolicy,
+    BackupError, BackupKdfPolicy, decode_signed_backup, encode_signed_backup,
 };
 use vipervault_core::core::policy::PolicyContext;
 use vipervault_core::memory::MasterPassword;

@@ -4,20 +4,25 @@
 //! Policy context for sensitive operations
 //!
 //! # Design
-//! Upper layers should pass a [`PolicyContext`] when invoking sensitive APIs \
-//! This provides defence-in-depth: even if a caller forgets to restrict a
-//! feature, the core still applies the policy consistently
+//! This module exposes the centralized policy matrix used by the core to decide
+//! whether sensitive operations should be allowed under:
+//! - a primary or decoy unlock outcome
+//! - the current runtime inspection state
+//! - the product-level sensitive operation category
 //!
-//! The centralized policy matrix is derived from:
-//! - unlock outcome (`Primary` vs `Decoy`)
-//! - runtime inspection state (`RuntimeInspectionState`)
+//! The intended architecture is:
+//! - pre-unlock and standalone flows may receive an explicit [`PolicyContext`]
+//! - post-unlock / in-session flows should derive policy from the manager-owned
+//!   session state instead of trusting callers to pass a fresh policy object
 //!
 //! # Security
-//! - Decoy sessions must deny exfiltration-oriented operations by default
-//! - Restrictive runtime states must degrade sensitive capabilities
+//! - Decoy sessions must deny exposure-prone and exfiltration-oriented actions
+//! - Restrictive runtime states must degrade or deny sensitive capabilities
+//! - Ambiguous runtime states are treated conservatively
 //! - Policy decisions should remain deterministic and directly testable
 
-use crate::core::antidebug::{current_runtime_inspection_state, RuntimeInspectionState};
+use crate::core::antidebug::{RuntimeInspectionState, current_runtime_inspection_state};
+use crate::core::session::SensitiveOperation;
 use crate::vault::duress::UnlockOutcome;
 
 /// Context describing security-relevant state for policy enforcement
@@ -29,11 +34,13 @@ pub struct PolicyContext {
 
 impl PolicyContext {
     /// Construct a policy context from an unlock outcome
+    ///
+    /// # Design
+    /// The current runtime inspection state is captured at construction time so
+    /// the resulting context remains deterministic for the lifetime of that value
     pub fn new(outcome: UnlockOutcome) -> Self {
         Self {
             outcome,
-            // Capture the current runtime inspection state at construction time
-            // so all policy decisions for this context remain deterministic
             runtime_state: current_runtime_inspection_state(),
         }
     }
@@ -73,6 +80,11 @@ impl PolicyContext {
         self.runtime_state.is_restrictive()
     }
 
+    /// Return `true` when the runtime posture indicates stronger tamper risk
+    pub fn is_tamper_suspected(&self) -> bool {
+        self.runtime_state.is_tamper_suspected()
+    }
+
     /// Evaluate whether plaintext or secret export is allowed for a given runtime state
     ///
     /// # Parameters
@@ -88,7 +100,7 @@ impl PolicyContext {
         !self.is_decoy() && matches!(state, RuntimeInspectionState::NotDebugged)
     }
 
-    /// Evaluate whether plaintext or secret export is allowed under the runtime soft policy
+    /// Evaluate whether plaintext or secret export is allowed under the runtime policy
     pub fn allow_secret_export(&self) -> bool {
         self.allow_secret_export_for_state(self.runtime_state)
     }
@@ -113,7 +125,7 @@ impl PolicyContext {
         !self.is_decoy() && matches!(state, RuntimeInspectionState::NotDebugged)
     }
 
-    /// Evaluate whether plaintext import is allowed under the runtime soft policy
+    /// Evaluate whether plaintext import is allowed under the runtime policy
     pub fn allow_plaintext_import(&self) -> bool {
         self.allow_plaintext_import_for_state(self.runtime_state)
     }
@@ -133,7 +145,7 @@ impl PolicyContext {
         !self.is_decoy() && matches!(state, RuntimeInspectionState::NotDebugged)
     }
 
-    /// Evaluate whether biometric unlock is allowed under the runtime soft policy
+    /// Evaluate whether biometric unlock is allowed under the runtime policy
     pub fn allow_biometric_unlock(&self) -> bool {
         self.allow_biometric_unlock_for_state(self.runtime_state)
     }
@@ -153,7 +165,7 @@ impl PolicyContext {
         !self.is_decoy() && matches!(state, RuntimeInspectionState::NotDebugged)
     }
 
-    /// Evaluate whether signed backup transfer is allowed under the runtime soft policy
+    /// Evaluate whether signed backup transfer is allowed under the runtime policy
     pub fn allow_signed_backup_transfer(&self) -> bool {
         self.allow_signed_backup_transfer_for_state(self.runtime_state)
     }
@@ -173,12 +185,12 @@ impl PolicyContext {
         !self.is_decoy() && matches!(state, RuntimeInspectionState::NotDebugged)
     }
 
-    /// Evaluate whether OTPAuth parsing/import is allowed under the runtime soft policy
+    /// Evaluate whether OTPAuth parsing/import is allowed under the runtime policy
     pub fn allow_otpauth_import(&self) -> bool {
         self.allow_otpauth_import_for_state(self.runtime_state)
     }
 
-    /// Evaluate whether clipboard copy is allowed for a given runtime state
+    /// Evaluate whether clipboard exposure is allowed for a given runtime state
     ///
     /// # Security
     /// Clipboard is an exposure-prone boundary and is denied in decoy mode and
@@ -187,7 +199,7 @@ impl PolicyContext {
         !self.is_decoy() && matches!(state, RuntimeInspectionState::NotDebugged)
     }
 
-    /// Evaluate whether clipboard copy is allowed under the runtime soft policy
+    /// Evaluate whether clipboard exposure is allowed under the runtime policy
     pub fn allow_clipboard_copy(&self) -> bool {
         self.allow_clipboard_copy_for_state(self.runtime_state)
     }
@@ -195,10 +207,19 @@ impl PolicyContext {
     /// Evaluate whether TOTP copy/reveal is allowed under the runtime policy
     ///
     /// # Security
-    /// TOTP disclosure uses the same clipboard-style exposure boundary and is
+    /// TOTP disclosure uses the same exposure boundary as clipboard copy and is
     /// therefore governed by the same runtime rule set
     pub fn allow_totp_copy(&self) -> bool {
         self.allow_clipboard_copy()
+    }
+
+    /// Evaluate whether direct secret reveal is allowed under the runtime policy
+    ///
+    /// # Security
+    /// Secret reveal is exposure-prone and therefore denied in decoy sessions
+    /// and under restrictive runtime states
+    pub fn allow_secret_reveal(&self) -> bool {
+        !self.is_decoy() && matches!(self.runtime_state, RuntimeInspectionState::NotDebugged)
     }
 
     /// Return `true` when runtime policy should force a shorter auto-lock posture
@@ -212,30 +233,48 @@ impl PolicyContext {
         self.runtime_state.is_restrictive()
     }
 
-    /// Return `true` when the runtime posture indicates stronger tamper risk
-    pub fn is_tamper_suspected(&self) -> bool {
-        self.runtime_state.is_tamper_suspected()
+    /// Evaluate whether a given sensitive operation is permitted by policy
+    ///
+    /// # Security
+    /// This helper centralizes the product-level operation matrix so the core
+    /// can make deterministic allow/deny decisions without duplicating logic
+    pub fn allow_sensitive_operation(&self, operation: SensitiveOperation) -> bool {
+        match operation {
+            SensitiveOperation::Export => self.allow_plaintext_export(),
+            SensitiveOperation::SignedBackupTransfer => self.allow_signed_backup_transfer(),
+            SensitiveOperation::RevealSecret => self.allow_secret_reveal(),
+            SensitiveOperation::CopySecret => self.allow_clipboard_copy(),
+            SensitiveOperation::CopyTotp => self.allow_totp_copy(),
+            SensitiveOperation::ChangeSecuritySettings => {
+                !self.is_decoy() && !self.is_runtime_restrictive()
+            }
+        }
     }
 }
 
-/// Evaluate whether plaintext or secret export is allowed under the runtime
-/// compatibility helper
+/// Return the current runtime policy context for a primary session
 ///
-/// # Security
-/// This remains a compatibility layer for existing call sites \
-/// It still applies the centralized runtime policy conservatively
-pub fn allow_export_under_soft_policy() -> bool {
+/// # Design
+/// This helper is intended for standalone, non-session-bound operations that do
+/// not run under a live manager-owned session context
+pub fn current_primary_runtime_policy() -> PolicyContext {
     PolicyContext::from_parts(UnlockOutcome::Primary, current_runtime_inspection_state())
-        .allow_plaintext_export()
 }
 
-/// Evaluate whether clipboard exposure is allowed under the runtime
-/// compatibility helper
+/// Evaluate whether plaintext export is allowed under the current runtime policy
 ///
-/// # Security
-/// This remains a compatibility layer for existing clipboard call sites and
-/// denies clipboard exposure under restrictive runtime states
-pub fn allow_clipboard_under_soft_policy() -> bool {
-    PolicyContext::from_parts(UnlockOutcome::Primary, current_runtime_inspection_state())
-        .allow_clipboard_copy()
+/// # Design
+/// This helper exists for standalone codec flows that do not run under an
+/// unlocked manager session
+pub fn allow_plaintext_export_under_runtime_policy() -> bool {
+    current_primary_runtime_policy().allow_plaintext_export()
+}
+
+/// Evaluate whether clipboard exposure is allowed under the current runtime policy
+///
+/// # Design
+/// This helper exists for standalone exposure boundaries that are not yet bound
+/// to a live manager session
+pub fn allow_clipboard_exposure_under_runtime_policy() -> bool {
+    current_primary_runtime_policy().allow_clipboard_copy()
 }

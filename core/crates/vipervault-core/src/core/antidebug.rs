@@ -125,9 +125,9 @@ fn detect_linux_like_runtime_state() -> RuntimeInspectionState {
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn detect_apple_runtime_state() -> RuntimeInspectionState {
     use libc::{
-        c_void, getpid, kinfo_proc, size_t, sysctl, CTL_KERN, KERN_PROC, KERN_PROC_PID, P_TRACED,
+        CTL_KERN, KERN_PROC, KERN_PROC_PID, P_TRACED, c_void, getpid, kinfo_proc, size_t, sysctl,
     };
-    use std::mem::{size_of, MaybeUninit};
+    use std::mem::{MaybeUninit, size_of};
     use std::ptr;
 
     let mut info = MaybeUninit::<kinfo_proc>::zeroed();

@@ -23,10 +23,10 @@ use std::time::Duration;
 use vipervault_core::biometrics::{BiometricBackend, BiometricError};
 use vipervault_core::core::{PolicyContext, RuntimeInspectionState, VaultLockManager};
 use vipervault_core::memory::{KeyMaterial, MasterPassword};
-use vipervault_core::vault::create::{create_duress_vault, create_encrypted_vault, VaultKdfPolicy};
+use vipervault_core::vault::create::{VaultKdfPolicy, create_duress_vault, create_encrypted_vault};
 use vipervault_core::vault::duress::UnlockOutcome;
 use vipervault_core::vault::{
-    decode_vault_file, encode_vault_storage, ParsedVaultFile, StorageMode, VaultPayload,
+    ParsedVaultFile, StorageMode, VaultPayload, decode_vault_file, encode_vault_storage,
 };
 
 /// Simple test backend used to exercise the trait contract and runtime unlocks
@@ -96,7 +96,7 @@ fn parsed_duress_vault(
         1,
         vault_kdf(),
     )
-        .expect("create duress vault");
+    .expect("create duress vault");
 
     let encoded = encode_vault_storage(&vault.header, &vault.storage, 1).expect("encode vault");
 
@@ -236,7 +236,7 @@ async fn unlock_with_master_key_unlocks_manager() {
         3,
         1,
     )
-        .expect("derive master key");
+    .expect("derive master key");
 
     manager
         .unlock_with_master_key(policy, &parsed, &key_bytes, Duration::from_secs(60))
@@ -264,7 +264,7 @@ async fn unlock_with_biometrics_unlocks_manager() {
         3,
         1,
     )
-        .expect("derive master key");
+    .expect("derive master key");
 
     let mut raw = [0u8; 32];
     raw.copy_from_slice(key_bytes.as_bytes());
@@ -392,7 +392,7 @@ async fn unlock_with_master_key_rejects_duress_vaults() {
         3,
         1,
     )
-        .expect("derive master key");
+    .expect("derive master key");
 
     let err = manager
         .unlock_with_master_key(policy, &parsed, &key_bytes, Duration::from_secs(60))
@@ -419,7 +419,7 @@ async fn unlock_with_master_key_rejects_plaintext_mode() {
         3,
         1,
     )
-        .expect("derive master key");
+    .expect("derive master key");
 
     let err = manager
         .unlock_with_master_key(policy, &parsed, &key_bytes, Duration::from_secs(60))

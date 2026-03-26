@@ -6,13 +6,14 @@
 //! # Security model
 //! The manager stores decrypted data as `plaintext_json` (`Zeroizing<Vec<u8>>`)
 //! Operations deserialize the payload temporarily, mutate it and immediately
-//! re-serialize back to `plaintext_json` to minimize secret exposure \
-//! Sensitive follow-up operations can require strong re-authentication
-//! depending on the current session
+//! re-serialize back to `plaintext_json` to minimize secret exposure
+//!
+//! Sensitive in-session operations are authorized through the manager-owned
+//! session policy rather than relying on caller-supplied policy objects
 
 use crate::clipboard::guard::ClipboardGuard;
-use crate::core::session::SensitiveOperation;
 use crate::core::VaultLockManager;
+use crate::core::session::SensitiveOperation;
 use crate::entries::{EntryError, EntrySummary, EntryUpdate, EntryView, VaultEntry};
 use crate::totp::clipboard::totp_generate_and_copy_to_clipboard;
 use secrecy::SecretString;
@@ -148,36 +149,38 @@ impl VaultLockManager {
     /// Retrieve a full decrypted entry view for a specific sensitive operation
     ///
     /// # Security
-    /// This method enforces the current strong re-authentication requirement for
-    /// exposure-prone operations such as secret reveal or secret copy
+    /// This method uses manager-owned policy and session state to enforce:
+    /// - unlocked state
+    /// - centralized runtime policy
+    /// - strong re-authentication requirements
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     pub async fn get_entry_for_operation(
         &self,
         entry_id: Uuid,
         operation: SensitiveOperation,
     ) -> Result<EntryView, EntryError> {
-        match self.requires_strong_reauth_for(operation).await {
-            None => Err(EntryError::VaultLocked),
-            Some(true) => Err(EntryError::ReauthRequired),
-            Some(false) => self.get_entry(entry_id).await,
-        }
+        self.authorize_sensitive_operation(operation).await?;
+        self.get_entry(entry_id).await
     }
 
     /// Reveal the secret of an entry through a manager-aware sensitive boundary
     ///
     /// # Security
     /// - Requires the vault to be unlocked
+    /// - Enforces manager-owned runtime policy
     /// - Enforces strong re-authentication for secret reveal
     /// - Returns a wrapped secret rather than a raw plaintext string
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     /// - `InvalidType` if the selected entry does not expose a direct secret
     pub async fn reveal_entry_secret(&self, entry_id: Uuid) -> Result<SecretString, EntryError> {
         self.reveal_entry_secret_for_operation(entry_id, SensitiveOperation::RevealSecret)
@@ -187,17 +190,18 @@ impl VaultLockManager {
     /// Reveal the secret of an entry for a specific sensitive operation
     ///
     /// # Design
-    /// This keeps the operation explicit so callers can distinguish
-    /// among reveal, copy and other exposure-prone semantics while sharing
-    /// the same enforcement path
+    /// This keeps the operation explicit so callers can distinguish among
+    /// reveal, copy and other exposure-prone semantics while sharing a single
+    /// manager-owned authorization path
     ///
     /// # Security
     /// The returned secret is copied into a fresh `SecretString` wrapper
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     /// - `InvalidType` if the selected entry does not expose a direct secret
     pub async fn reveal_entry_secret_for_operation(
         &self,
@@ -219,13 +223,15 @@ impl VaultLockManager {
     ///
     /// # Security
     /// - Requires the vault to be unlocked
+    /// - Enforces manager-owned runtime policy
     /// - Enforces strong re-authentication for secret copy
     /// - Uses `ClipboardGuard` for timeout-based auto-clear
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     /// - `InvalidType` if the selected entry does not expose a direct secret
     pub async fn copy_entry_secret(
         &self,
@@ -239,7 +245,7 @@ impl VaultLockManager {
             clipboard,
             timeout,
         )
-            .await
+        .await
     }
 
     /// Copy the secret of an entry for a specific sensitive operation
@@ -250,8 +256,9 @@ impl VaultLockManager {
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     /// - `InvalidType` if the selected entry does not expose a direct secret
     pub async fn copy_entry_secret_for_operation(
         &self,
@@ -273,6 +280,7 @@ impl VaultLockManager {
     ///
     /// # Security
     /// - Requires the vault to be unlocked
+    /// - Enforces manager-owned runtime policy
     /// - Enforces strong re-authentication for TOTP copy
     /// - Uses `ClipboardGuard` for timeout-based auto-clear
     /// - Delegates OTP generation to the low-level TOTP primitive only after
@@ -280,8 +288,9 @@ impl VaultLockManager {
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     /// - `InvalidType` if the selected entry is not a TOTP entry
     /// - `InvalidData` if the stored TOTP configuration is inconsistent
     pub async fn copy_entry_totp(
@@ -298,20 +307,20 @@ impl VaultLockManager {
             clipboard,
             timeout,
         )
-            .await
+        .await
     }
 
     /// Copy the current TOTP code of an entry for a specific sensitive operation
     ///
     /// # Design
-    /// This keeps the operation explicit so callers can distinguish
-    /// between TOTP reveal/copy semantics while sharing the same enforcement
-    /// path
+    /// This keeps the operation explicit so callers can distinguish between TOTP
+    /// reveal/copy semantics while sharing the same manager-owned authorization path
     ///
     /// # Errors
     /// - `VaultLocked` if the vault is locked
-    /// - `EntryNotFound` if the entry does not exist
+    /// - `PolicyDenied` if policy forbids the operation in the current session
     /// - `ReauthRequired` if strong re-authentication is currently required
+    /// - `EntryNotFound` if the entry does not exist
     /// - `InvalidType` if the selected entry is not a TOTP entry
     /// - `InvalidData` if the stored TOTP configuration is inconsistent
     pub async fn copy_entry_totp_for_operation(
@@ -322,7 +331,9 @@ impl VaultLockManager {
         clipboard: &mut ClipboardGuard,
         timeout: Option<Duration>,
     ) -> Result<(), EntryError> {
-        let entry = self.get_entry_for_operation(entry_id, operation).await?;
+        self.authorize_sensitive_operation(operation).await?;
+
+        let entry = self.get_entry(entry_id).await?;
         let totp = entry.totp.as_ref().ok_or(EntryError::InvalidType)?;
 
         totp_generate_and_copy_to_clipboard(totp, unix_time_secs, clipboard, timeout)

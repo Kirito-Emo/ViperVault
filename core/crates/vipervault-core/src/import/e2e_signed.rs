@@ -11,18 +11,17 @@
 //! - Denied in decoy mode
 //! - Denied under restrictive runtime policy
 //! - Does not distinguish wrong password from tampering (`AuthFailed`)
-//! - Plaintext JSON produced for unlock is placed into a protected buffer
-//!   immediately after serialization
+//! - The unlock path now reuses the protected plaintext JSON returned by the gated
+//!   unlock primitive instead of re-serializing a materialized payload
 
-use super::signed::import_vipervault_from_signed_backup;
 use super::ImportError;
+use super::signed::import_vipervault_from_signed_backup;
+use crate::core::VaultLockManager;
 use crate::core::auth_gate::AuthGate;
 use crate::core::policy::PolicyContext;
-use crate::core::unlock::unlock_session_gated;
-use crate::core::VaultLockManager;
+use crate::core::unlock::unlock_plaintext_json_gated;
 use crate::memory::MasterPassword;
 use std::time::Duration;
-use zeroize::Zeroizing;
 
 /// Import a signed backup blob and unlock the manager
 ///
@@ -34,6 +33,8 @@ use zeroize::Zeroizing;
 /// - Does not leak wrong password vs tampering
 /// - Runs password-based unlock under [`AuthGate`]
 /// - Denied by the centralized runtime policy
+/// - Reuses the protected plaintext JSON returned by the unlock primitive to
+///   avoid an additional plaintext serialization step
 pub async fn import_signed_vault_and_unlock(
     policy: PolicyContext,
     gate: &AuthGate,
@@ -48,13 +49,9 @@ pub async fn import_signed_vault_and_unlock(
 
     let parsed = import_vipervault_from_signed_backup(policy, &password, signed_backup_bytes)?;
 
-    let session = unlock_session_gated(gate, parsed, password)
+    let (_outcome, plaintext_json) = unlock_plaintext_json_gated(gate, parsed, password)
         .await
         .map_err(|_| ImportError::AuthFailed)?;
-
-    let plaintext_json = Zeroizing::new(
-        serde_json::to_vec(session.payload()).map_err(|_| ImportError::InvalidFormat)?,
-    );
 
     manager
         .unlock_with_plaintext_json(plaintext_json, timeout)

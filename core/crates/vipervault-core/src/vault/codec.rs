@@ -4,14 +4,14 @@
 //! Vault container codec
 //!
 //! # Security
-//! - Plaintext export is denied under the anti-debug soft policy
+//! - Plaintext export is denied under the runtime policy helper
 //! - Duress-enabled vaults must not be exported as plaintext
 //! - Raw header bytes are preserved exactly as stored because they are used as
 //!   AEAD AAD
 
-use crate::core::allow_export_under_soft_policy;
+use crate::core::allow_plaintext_export_under_runtime_policy;
 use crate::vault::{
-    ParsedVaultFile, StorageMode, VaultHeader, VaultParseError, VaultStorage, MAGIC, MAX_HEADER_LEN,
+    MAGIC, MAX_HEADER_LEN, ParsedVaultFile, StorageMode, VaultHeader, VaultParseError, VaultStorage,
 };
 use std::io::{Read, Write};
 
@@ -21,8 +21,8 @@ pub const MAX_VAULT_CONTAINER_PAYLOAD_LEN: u64 = 16 * 1024 * 1024; // 16 MiB
 /// Encode a vault container
 ///
 /// # Security
-/// - Plaintext export is denied under the anti-debug soft policy
-/// - Duress-enabled vaults must not be exported as plaintext (policy hardening)
+/// - Plaintext export is denied under the runtime policy helper
+/// - Duress-enabled vaults must not be exported as plaintext
 pub fn encode_vault_storage(
     header: &VaultHeader,
     storage: &VaultStorage,
@@ -32,13 +32,13 @@ pub fn encode_vault_storage(
         return Err(VaultParseError::UnsupportedVersion);
     }
 
-    // Policy hardening for duress mode
     if header.duress.is_some() && matches!(storage, VaultStorage::PlaintextJson { .. }) {
         return Err(VaultParseError::PlaintextNotAllowed);
     }
 
-    // Enforce soft policy on plaintext export
-    if matches!(storage, VaultStorage::PlaintextJson { .. }) && !allow_export_under_soft_policy() {
+    if matches!(storage, VaultStorage::PlaintextJson { .. })
+        && !allow_plaintext_export_under_runtime_policy()
+    {
         return Err(VaultParseError::PlaintextNotAllowed);
     }
 
@@ -75,9 +75,9 @@ pub fn encode_vault_storage(
 /// - `allow_plaintext`: if false, plaintext payloads are rejected
 ///
 /// # Security
-/// - Plaintext payloads are rejected under soft policy
+/// - Plaintext payloads are rejected under runtime policy
 /// - Header bytes are preserved for AEAD AAD usage
-/// - Duress + plaintext is rejected (policy hardening)
+/// - Duress + plaintext is rejected
 pub fn decode_vault_file(
     mut input: impl Read,
     expected_format_version: Option<u16>,
@@ -108,7 +108,7 @@ pub fn decode_vault_file(
     let mode = match storage_mode_raw {
         1 => StorageMode::Encrypted,
         2 => {
-            if !allow_plaintext || !allow_export_under_soft_policy() {
+            if !allow_plaintext || !allow_plaintext_export_under_runtime_policy() {
                 return Err(VaultParseError::PlaintextNotAllowed);
             }
             StorageMode::PlaintextJson
@@ -131,7 +131,6 @@ pub fn decode_vault_file(
 
     let header = deserialize_header_json(&header_bytes)?;
 
-    // Policy hardening for duress mode
     if header.duress.is_some() && mode == StorageMode::PlaintextJson {
         return Err(VaultParseError::PlaintextNotAllowed);
     }
@@ -167,15 +166,8 @@ pub fn decode_vault_file(
 /// Convenience helper: encode and write a vault container to a writer
 ///
 /// # Security
-/// - This function does NOT bypass any security policy
-/// - Plaintext export is still subject to anti-debug soft policy checks enforced by [`encode_vault_storage`]
-///
-/// # Intended usage
-/// - Internal helper for writing vault data to files, buffers or tests
-/// - Must not be treated as a user-facing export API
-///
-/// # Errors
-/// Returns [`VaultParseError`] if encoding or writing fails
+/// - This function does not bypass policy
+/// - Plaintext export remains subject to runtime policy checks enforced by [`encode_vault_storage`]
 #[allow(dead_code)]
 pub(crate) fn write_vault_storage(
     mut out: impl Write,

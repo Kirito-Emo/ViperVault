@@ -13,10 +13,10 @@
 //! This module provides a single high-level entry point so the UI layer never
 //! directly manipulates [`crate::vault::VaultPayload`]
 
-use crate::core::policy::PolicyContext;
 use crate::core::VaultLockManager;
-use crate::import::interop::{commit_quarantined_import_into_payload, QuarantinedImport};
+use crate::core::policy::PolicyContext;
 use crate::import::ImportError;
+use crate::import::interop::{QuarantinedImport, commit_quarantined_import_into_payload};
 
 impl VaultLockManager {
     /// Commit a quarantined import into the currently unlocked vault payload

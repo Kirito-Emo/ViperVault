@@ -32,6 +32,9 @@ pub enum EntryError {
     #[error("reauthentication required")]
     ReauthRequired,
 
+    #[error("operation denied by runtime policy")]
+    PolicyDenied,
+
     #[error("invalid entry type")]
     InvalidType,
 

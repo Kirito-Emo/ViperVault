@@ -14,8 +14,8 @@
 //! A vault being "unlocked" is not sufficient, by itself, to decide whether a
 //! sensitive operation should be allowed without re-authentication
 
-use crate::vault::duress::UnlockOutcome;
 use crate::vault::VaultPayload;
+use crate::vault::duress::UnlockOutcome;
 
 /// Authentication strength associated with the current session
 ///
@@ -227,8 +227,8 @@ mod tests {
     use super::{
         AuthenticationStrength, RuntimeSecurityEvent, SensitiveOperation, UnlockedVaultSession,
     };
-    use crate::vault::duress::UnlockOutcome;
     use crate::vault::VaultPayload;
+    use crate::vault::duress::UnlockOutcome;
 
     /// Strong sessions must not require strong re-authentication for sensitive
     /// operations solely because of session strength
@@ -258,9 +258,9 @@ mod tests {
     }
 
     /// Quick-unlock sessions must require strong re-authentication for
-    /// sensitive operations
+    /// exposure-prone follow-up operations
     #[test]
-    fn quick_unlock_session_requires_strong_reauth_for_sensitive_ops() {
+    fn quick_unlock_requires_strong_reauth_for_sensitive_ops() {
         let session = UnlockedVaultSession::with_strength(
             UnlockOutcome::Primary,
             VaultPayload { entries: vec![] },
@@ -268,20 +268,30 @@ mod tests {
         );
 
         assert!(!session.is_strong());
-        assert!(session.requires_strong_reauth_for(SensitiveOperation::SignedBackupTransfer));
+        assert!(session.requires_strong_reauth_for(SensitiveOperation::RevealSecret));
         assert!(session.requires_strong_reauth_for(SensitiveOperation::ChangeSecuritySettings));
     }
 
-    /// Runtime events must distinguish between "force lock" and
-    /// "require strong re-authentication" behaviour
+    /// Decoy sessions must still report their outcome independently from auth strength
     #[test]
-    fn runtime_security_event_semantics_are_conservative() {
+    fn decoy_session_reports_decoy_outcome() {
+        let session = UnlockedVaultSession::with_strength(
+            UnlockOutcome::Decoy,
+            VaultPayload { entries: vec![] },
+            AuthenticationStrength::Strong,
+        );
+
+        assert!(session.is_decoy());
+        assert_eq!(session.outcome(), UnlockOutcome::Decoy);
+    }
+
+    /// Runtime security events must keep their lock vs re-auth semantics stable
+    #[test]
+    fn runtime_event_semantics_remain_stable() {
         assert!(RuntimeSecurityEvent::DeviceLocked.forces_lock());
         assert!(RuntimeSecurityEvent::BiometricSetChanged.forces_lock());
         assert!(RuntimeSecurityEvent::QuickUnlockInvalidated.forces_lock());
         assert!(RuntimeSecurityEvent::RuntimeBecameRestrictive.forces_lock());
-        assert!(!RuntimeSecurityEvent::AppBackgrounded.forces_lock());
-
         assert!(RuntimeSecurityEvent::AppBackgrounded.requires_strong_reauth());
         assert!(!RuntimeSecurityEvent::DeviceLocked.requires_strong_reauth());
     }

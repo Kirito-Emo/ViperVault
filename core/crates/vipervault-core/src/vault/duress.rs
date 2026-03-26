@@ -12,6 +12,7 @@
 //!
 //! # Security
 //! - Decryption failures are mapped to `VaultParseError::AuthFailed` to avoid oracle behaviour
+//! - The canonical low-level unlock path returns validated protected plaintext JSON bytes
 
 use super::error::VaultParseError;
 use super::types::{
@@ -19,7 +20,7 @@ use super::types::{
 };
 use crate::crypto::aead::{decrypt_xchacha20poly1305, encrypt_xchacha20poly1305};
 use crate::crypto::kdf::derive_master_key_from_password;
-use crate::memory::MasterPassword;
+use crate::memory::{MasterPassword, SecretBytes};
 use zeroize::Zeroizing;
 
 /// Which payload was unlocked
@@ -29,25 +30,27 @@ pub enum UnlockOutcome {
     Decoy,   // The decoy vault was unlocked
 }
 
-/// Unlock a duress-enabled vault envelope
+/// Unlock a duress-enabled vault envelope into validated protected plaintext JSON bytes
 ///
-/// Tries primary first, then decoy
-/// If both fail, returns `AuthFailed`
-pub fn unlock_duress_envelope(
+/// Tries primary first, then decoy, if both fail, returns `AuthFailed`
+///
+/// # Security
+/// Validation is performed before returning the plaintext buffer so callers can
+/// keep using the protected bytes without introducing an extra serialization step
+pub fn unlock_duress_envelope_to_plaintext_json(
     header_bytes: &[u8],
     duress_header: &DualVaultHeader,
     envelope: &DualCiphertextEnvelope,
     password: &MasterPassword,
-) -> Result<(UnlockOutcome, VaultPayload), VaultParseError> {
+) -> Result<(UnlockOutcome, SecretBytes), VaultParseError> {
     if let Ok(pt) = decrypt_with_crypto_header(
         header_bytes,
         &duress_header.primary,
         envelope.primary_ct.as_slice(),
         password,
     ) {
-        let payload: VaultPayload =
-            serde_json::from_slice(pt.as_slice()).map_err(|_| VaultParseError::InvalidPayload)?;
-        return Ok((UnlockOutcome::Primary, payload));
+        validate_payload_json(pt.as_slice())?;
+        return Ok((UnlockOutcome::Primary, pt));
     }
 
     if let Ok(pt) = decrypt_with_crypto_header(
@@ -56,12 +59,29 @@ pub fn unlock_duress_envelope(
         envelope.decoy_ct.as_slice(),
         password,
     ) {
-        let payload: VaultPayload =
-            serde_json::from_slice(pt.as_slice()).map_err(|_| VaultParseError::InvalidPayload)?;
-        return Ok((UnlockOutcome::Decoy, payload));
+        validate_payload_json(pt.as_slice())?;
+        return Ok((UnlockOutcome::Decoy, pt));
     }
 
     Err(VaultParseError::AuthFailed)
+}
+
+/// Unlock a duress-enabled vault envelope
+///
+/// Tries primary first, then decoy, if both fail, returns `AuthFailed`
+pub fn unlock_duress_envelope(
+    header_bytes: &[u8],
+    duress_header: &DualVaultHeader,
+    envelope: &DualCiphertextEnvelope,
+    password: &MasterPassword,
+) -> Result<(UnlockOutcome, VaultPayload), VaultParseError> {
+    let (outcome, plaintext_json) =
+        unlock_duress_envelope_to_plaintext_json(header_bytes, duress_header, envelope, password)?;
+
+    let payload: VaultPayload = serde_json::from_slice(plaintext_json.as_slice())
+        .map_err(|_| VaultParseError::InvalidPayload)?;
+
+    Ok((outcome, payload))
 }
 
 /// Encrypt a primary + decoy payload into an envelope
@@ -73,19 +93,48 @@ pub fn encrypt_duress_envelope(
     primary_payload: &VaultPayload,
     decoy_payload: &VaultPayload,
 ) -> Result<DualCiphertextEnvelope, VaultParseError> {
-    let primary_pt = serde_json::to_vec(primary_payload).map_err(|_| VaultParseError::Serialize)?;
-    let decoy_pt = serde_json::to_vec(decoy_payload).map_err(|_| VaultParseError::Serialize)?;
+    let primary_pt = Zeroizing::new(
+        serde_json::to_vec(primary_payload).map_err(|_| VaultParseError::Serialize)?,
+    );
+    let decoy_pt =
+        Zeroizing::new(serde_json::to_vec(decoy_payload).map_err(|_| VaultParseError::Serialize)?);
+
+    encrypt_duress_envelope_from_plaintext_json(
+        header_bytes,
+        duress_header,
+        primary_password,
+        decoy_password,
+        primary_pt.as_slice(),
+        decoy_pt.as_slice(),
+    )
+}
+
+/// Encrypt primary + decoy plaintext JSON bytes into an envelope
+///
+/// # Security
+/// In case of already validated plaintext JSON, prefer this helper
+/// to avoid materializing an additional [`VaultPayload`] only for re-serialization
+pub fn encrypt_duress_envelope_from_plaintext_json(
+    header_bytes: &[u8],
+    duress_header: &DualVaultHeader,
+    primary_password: &MasterPassword,
+    decoy_password: &MasterPassword,
+    primary_plaintext_json: &[u8],
+    decoy_plaintext_json: &[u8],
+) -> Result<DualCiphertextEnvelope, VaultParseError> {
+    validate_payload_json(primary_plaintext_json)?;
+    validate_payload_json(decoy_plaintext_json)?;
 
     let primary_ct = encrypt_with_crypto_header(
         header_bytes,
         &duress_header.primary,
-        primary_pt.as_slice(),
+        primary_plaintext_json,
         primary_password,
     )?;
     let decoy_ct = encrypt_with_crypto_header(
         header_bytes,
         &duress_header.decoy,
-        decoy_pt.as_slice(),
+        decoy_plaintext_json,
         decoy_password,
     )?;
 
@@ -132,8 +181,19 @@ fn encrypt_with_crypto_header(
     };
 
     let key = derive_master_key_from_password(password, &ch.salt, mem_kib, time_cost, lanes)
-        .map_err(|_| VaultParseError::InvalidHeader)?;
+        .map_err(|_| VaultParseError::AuthFailed)?;
 
     encrypt_xchacha20poly1305(&key, &ch.nonce, plaintext, header_bytes)
-        .map_err(|_| VaultParseError::Serialize)
+        .map_err(|_| VaultParseError::AuthFailed)
+}
+
+/// Validate that a plaintext JSON buffer decodes into a vault payload
+///
+/// # Security
+/// This helper is intentionally strict so callers can reject malformed JSON
+/// before persisting or returning it across a trust boundary
+fn validate_payload_json(plaintext_json: &[u8]) -> Result<(), VaultParseError> {
+    let _payload: VaultPayload =
+        serde_json::from_slice(plaintext_json).map_err(|_| VaultParseError::InvalidPayload)?;
+    Ok(())
 }

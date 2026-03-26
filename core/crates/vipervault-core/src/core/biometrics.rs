@@ -14,9 +14,9 @@
 //!   strong master-password session
 
 use crate::biometrics::{BiometricBackend, BiometricError};
+use crate::core::VaultLockManager;
 use crate::core::policy::PolicyContext;
 use crate::core::session::AuthenticationStrength;
-use crate::core::VaultLockManager;
 use crate::crypto::aead::decrypt_xchacha20poly1305;
 use crate::memory::{KeyMaterial, SecretBytes};
 use crate::vault::{ParsedVaultFile, StorageMode};
@@ -48,7 +48,7 @@ impl VaultLockManager {
             timeout,
             AuthenticationStrength::Biometric,
         )
-            .await;
+        .await;
         Ok(())
     }
 

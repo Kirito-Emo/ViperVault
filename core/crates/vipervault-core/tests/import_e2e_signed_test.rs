@@ -21,17 +21,17 @@
 
 use secrecy::ExposeSecret;
 use std::time::Duration;
-use vipervault_core::backup::{encode_signed_backup, BackupKdfPolicy};
+use vipervault_core::backup::{BackupKdfPolicy, encode_signed_backup};
+use vipervault_core::core::VaultLockManager;
 use vipervault_core::core::auth_gate::AuthGate;
 use vipervault_core::core::policy::PolicyContext;
 use vipervault_core::core::rate_limit::UnlockThrottlePolicy;
-use vipervault_core::core::VaultLockManager;
 use vipervault_core::entries::types::VaultEntry;
-use vipervault_core::import::{import_signed_vault_and_unlock, ImportError};
+use vipervault_core::import::{ImportError, import_signed_vault_and_unlock};
 use vipervault_core::memory::MasterPassword;
-use vipervault_core::vault::create::{create_encrypted_vault, VaultKdfPolicy};
+use vipervault_core::vault::create::{VaultKdfPolicy, create_encrypted_vault};
 use vipervault_core::vault::duress::UnlockOutcome;
-use vipervault_core::vault::{encode_vault_storage, VaultPayload};
+use vipervault_core::vault::{VaultPayload, encode_vault_storage};
 
 /// Build the backup KDF policy used across tests
 fn backup_kdf() -> BackupKdfPolicy {
@@ -137,8 +137,8 @@ async fn import_signed_e2e_exposes_expected_payload_after_unlock() {
         &signed,
         Duration::from_secs(60),
     )
-        .await
-        .expect("e2e import");
+    .await
+    .expect("e2e import");
 
     let unlocked_payload = manager.get_payload().await.expect("payload");
     assert_eq!(unlocked_payload.entries.len(), 1);

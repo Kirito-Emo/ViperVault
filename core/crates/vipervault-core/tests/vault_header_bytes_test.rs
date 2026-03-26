@@ -15,8 +15,8 @@
 
 use uuid::Uuid;
 use vipervault_core::vault::{
-    decode_vault_file, encode_vault_storage, AeadSuite, CryptoHeader, KdfParams, ParsedVaultFile, StorageMode,
-    VaultHeader, VaultStorage,
+    AeadSuite, CryptoHeader, KdfParams, ParsedVaultFile, StorageMode, VaultHeader, VaultStorage,
+    decode_vault_file, encode_vault_storage,
 };
 
 /// Build a minimal encrypted vault header for testing

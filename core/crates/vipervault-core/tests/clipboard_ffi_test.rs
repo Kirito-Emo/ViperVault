@@ -23,9 +23,9 @@ use std::ptr;
 use tokio::task::yield_now;
 use tokio::time::advance;
 use vipervault_core::clipboard::ffi::{
-    vv_clipboard_guard_cancel, vv_clipboard_guard_copy_with_timeout, vv_clipboard_guard_free, vv_clipboard_guard_new, VvClipboardVTable, MAX_CLIPBOARD_BYTES,
-    MAX_SECRET_BYTES, VV_ERR_BOUNDS, VV_ERR_NULL,
-    VV_ERR_UTF8, VV_OK,
+    MAX_CLIPBOARD_BYTES, MAX_SECRET_BYTES, VV_ERR_BOUNDS, VV_ERR_NULL, VV_ERR_UTF8, VV_OK,
+    VvClipboardVTable, vv_clipboard_guard_cancel, vv_clipboard_guard_copy_with_timeout,
+    vv_clipboard_guard_free, vv_clipboard_guard_new,
 };
 
 #[repr(C)]

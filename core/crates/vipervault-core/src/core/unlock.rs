@@ -6,17 +6,19 @@
 //! # Security
 //! - Authentication failures are coarse-grained to avoid creating wrong-password vs tampering oracles
 //! - Plaintext vault JSON is returned in a protected buffer when needed for the runtime lock manager
+//! - The canonical unlock boundary returns protected plaintext JSON rather than a materialized payload
 
 use super::auth_gate::AuthGate;
 use super::session::UnlockedVaultSession;
-use crate::crypto::aead::{decrypt_xchacha20poly1305, AeadError};
-use crate::crypto::kdf::{derive_master_key_from_password, KdfError};
+use crate::crypto::aead::{AeadError, decrypt_xchacha20poly1305};
+use crate::crypto::kdf::{KdfError, derive_master_key_from_password};
 use crate::memory::{MasterPassword, SecretBytes};
-use crate::vault::duress::{unlock_duress_envelope, UnlockOutcome};
+use crate::vault::duress::{
+    UnlockOutcome, unlock_duress_envelope, unlock_duress_envelope_to_plaintext_json,
+};
 use crate::vault::{
     DualCiphertextEnvelope, KdfParams, ParsedVaultFile, StorageMode, VaultParseError, VaultPayload,
 };
-use zeroize::Zeroizing;
 
 /// Errors returned by the unlock flow
 ///
@@ -57,9 +59,28 @@ pub async fn unlock_session_gated(
     parsed: ParsedVaultFile,
     password: MasterPassword,
 ) -> Result<UnlockedVaultSession, UnlockError> {
-    let (outcome, payload) = gate
+    let (outcome, plaintext_json) = unlock_plaintext_json_gated(gate, parsed, password).await?;
+    let payload = serde_json::from_slice::<VaultPayload>(plaintext_json.as_slice())
+        .map_err(|_| UnlockError::PayloadDecode)?;
+
+    Ok(UnlockedVaultSession::new(outcome, payload))
+}
+
+/// Unlock the vault into protected plaintext JSON under [`AuthGate`]
+///
+/// # Security
+/// - This is the canonical gated unlock path for callers that do not need a
+///   fully materialized [`VaultPayload`]
+/// - Returning protected plaintext JSON avoids an extra plaintext re-serialization step
+/// - In duress mode, a successful decoy unlock does not reset the throttle state
+pub async fn unlock_plaintext_json_gated(
+    gate: &AuthGate,
+    parsed: ParsedVaultFile,
+    password: MasterPassword,
+) -> Result<(UnlockOutcome, SecretBytes), UnlockError> {
+    let (outcome, plaintext_json) = gate
         .run(
-            || async move { unlock_vault_with_outcome(&parsed, &password) },
+            || async move { unlock_vault_to_plaintext_json_with_outcome(&parsed, &password) },
             |e: &UnlockError| matches!(e, UnlockError::AuthFailed),
             |_| false,
         )
@@ -69,7 +90,7 @@ pub async fn unlock_session_gated(
         gate.reset().await;
     }
 
-    Ok(UnlockedVaultSession::new(outcome, payload))
+    Ok((outcome, plaintext_json))
 }
 
 /// Unlock an encrypted vault payload from a previously parsed container using the provided password
@@ -80,7 +101,7 @@ pub fn unlock_vault(
     password: &MasterPassword,
 ) -> Result<VaultPayload, UnlockError> {
     let plaintext = unlock_vault_to_plaintext_json(parsed, password)?;
-    serde_json::from_slice(&plaintext).map_err(|_| UnlockError::PayloadDecode)
+    serde_json::from_slice(plaintext.as_slice()).map_err(|_| UnlockError::PayloadDecode)
 }
 
 /// Unlock the vault and return plaintext JSON for the runtime lock manager
@@ -93,6 +114,19 @@ pub fn unlock_vault_to_plaintext_json(
     parsed: &ParsedVaultFile,
     password: &MasterPassword,
 ) -> Result<SecretBytes, UnlockError> {
+    let (_outcome, plaintext_json) = unlock_vault_to_plaintext_json_with_outcome(parsed, password)?;
+    Ok(plaintext_json)
+}
+
+/// Unlock the vault, report the unlocked branch and return protected plaintext JSON
+///
+/// # Security
+/// This function is the canonical low-level unlock primitive used by runtime
+/// services that want to keep the decrypted vault in a protected byte buffer
+pub fn unlock_vault_to_plaintext_json_with_outcome(
+    parsed: &ParsedVaultFile,
+    password: &MasterPassword,
+) -> Result<(UnlockOutcome, SecretBytes), UnlockError> {
     if parsed.mode != StorageMode::Encrypted {
         return Err(UnlockError::AuthFailed);
     }
@@ -102,7 +136,7 @@ pub fn unlock_vault_to_plaintext_json(
         let envelope: DualCiphertextEnvelope = serde_json::from_slice(parsed.payload.as_slice())
             .map_err(|_| UnlockError::PayloadDecode)?;
 
-        let (_outcome, payload) = unlock_duress_envelope(
+        let (outcome, plaintext_json) = unlock_duress_envelope_to_plaintext_json(
             parsed.header_bytes.as_slice(),
             duress_header,
             &envelope,
@@ -110,12 +144,9 @@ pub fn unlock_vault_to_plaintext_json(
         )
         .map_err(|_| UnlockError::AuthFailed)?;
 
-        let json =
-            Zeroizing::new(serde_json::to_vec(&payload).map_err(|_| UnlockError::PayloadDecode)?);
-        return Ok(json);
+        return Ok((outcome, plaintext_json));
     }
 
-    // Legacy mode: payload is a raw ciphertext
     let (mem_kib, time_cost, lanes) = match &parsed.header.crypto.kdf {
         KdfParams::Argon2id {
             mem_kib,
@@ -132,13 +163,15 @@ pub fn unlock_vault_to_plaintext_json(
         lanes,
     )?;
 
-    decrypt_xchacha20poly1305(
+    let plaintext_json = decrypt_xchacha20poly1305(
         &master_key,
         &parsed.header.crypto.nonce,
         &parsed.payload,
         &parsed.header_bytes,
     )
-    .map_err(map_aead_error)
+    .map_err(map_aead_error)?;
+
+    Ok((UnlockOutcome::Primary, plaintext_json))
 }
 
 /// Unlock the vault and report whether the primary or decoy payload was unlocked

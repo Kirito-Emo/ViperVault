@@ -25,15 +25,15 @@
 
 use super::error::BackupError;
 use super::types::{
-    BackupHeader, BackupKdfPolicy, BACKUP_MAGIC, BACKUP_VERSION, MAX_BACKUP_PAYLOAD_LEN,
+    BACKUP_MAGIC, BACKUP_VERSION, BackupHeader, BackupKdfPolicy, MAX_BACKUP_PAYLOAD_LEN,
 };
 use crate::core::policy::PolicyContext;
 use crate::crypto::kdf::derive_master_key_from_password;
 use crate::memory::MasterPassword;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use rand::rngs::SysRng;
 use rand::TryRng;
+use rand::rngs::SysRng;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 

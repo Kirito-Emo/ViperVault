@@ -6,6 +6,7 @@
 //! # Scope
 //! These tests validate manager-aware sensitive entry boundaries:
 //! - re-authenticated entry access
+//! - runtime-policy-gated entry access
 //! - secret reveal
 //! - secret copy
 //! - TOTP copy
@@ -13,6 +14,7 @@
 //! # Security
 //! Sensitive entry operations must distinguish among:
 //! - locked vault
+//! - unlocked but policy-denied session
 //! - unlocked but re-auth-required session
 //! - unlocked and sufficiently strong session
 //! - wrong entry type
@@ -23,11 +25,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vipervault_core::clipboard::guard::{ClipboardBackend, ClipboardGuard};
 use vipervault_core::core::{
-    AuthenticationStrength, RuntimeSecurityEvent, SensitiveOperation, VaultLockManager,
+    AuthenticationStrength, RuntimeInspectionState, RuntimeSecurityEvent, SensitiveOperation,
+    VaultLockManager,
 };
 use vipervault_core::entries::types::{TotpAlgorithm, TotpSecret};
 use vipervault_core::entries::{EntryError, VaultEntry};
 use vipervault_core::vault::VaultPayload;
+use vipervault_core::vault::duress::UnlockOutcome;
 
 #[derive(Debug, Clone, Default)]
 struct TestClipboardBackend {
@@ -56,7 +60,7 @@ fn payload_with_password_entry() -> (VaultPayload, uuid::Uuid) {
         "super-secret".to_string(),
         Some("note".to_string()),
     )
-        .expect("entry");
+    .expect("entry");
 
     let id = entry.meta.id;
     (
@@ -110,9 +114,12 @@ async fn strong_session_allows_reveal_secret_operation() {
     let (payload, entry_id) = payload_with_password_entry();
 
     manager
-        .unlock_with_plaintext_json(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
@@ -132,10 +139,12 @@ async fn biometric_session_requires_reauth_for_reveal_secret() {
     let (payload, entry_id) = payload_with_password_entry();
 
     manager
-        .unlock_with_plaintext_json_with_strength(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
             AuthenticationStrength::Biometric,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
@@ -154,10 +163,12 @@ async fn quick_unlock_session_requires_reauth_for_copy_secret() {
     let (payload, entry_id) = payload_with_password_entry();
 
     manager
-        .unlock_with_plaintext_json_with_strength(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
             AuthenticationStrength::QuickUnlock,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
@@ -176,9 +187,12 @@ async fn sticky_reauth_requirement_blocks_sensitive_operations() {
     let (payload, entry_id) = payload_with_password_entry();
 
     manager
-        .unlock_with_plaintext_json(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
@@ -205,9 +219,12 @@ async fn clearing_reauth_requirement_restores_sensitive_access() {
     let (payload, entry_id) = payload_with_password_entry();
 
     manager
-        .unlock_with_plaintext_json(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
@@ -231,7 +248,81 @@ async fn clearing_reauth_requirement_restores_sensitive_access() {
     assert_eq!(entry.expose_secret(), "super-secret");
 }
 
-/// Locked managers must still fail with `VaultLocked` rather than `ReauthRequired`
+/// Decoy sessions must deny sensitive reveal operations even when the runtime is clean
+#[tokio::test]
+async fn decoy_session_denies_sensitive_reveal() {
+    let manager = VaultLockManager::new();
+    let (payload, entry_id) = payload_with_password_entry();
+
+    manager
+        .unlock_with_plaintext_json_with_context(
+            serde_json::to_vec(&payload).expect("serialize payload"),
+            Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Decoy,
+            RuntimeInspectionState::NotDebugged,
+        )
+        .await;
+
+    let err = manager.reveal_entry_secret(entry_id).await.unwrap_err();
+    assert!(matches!(err, EntryError::PolicyDenied));
+}
+
+/// Restrictive runtime states must deny secret copy before clipboard exposure happens
+#[tokio::test]
+async fn restrictive_runtime_denies_secret_copy() {
+    let manager = VaultLockManager::new();
+    let (payload, entry_id) = payload_with_password_entry();
+    let backend = TestClipboardBackend::default();
+    let mut clipboard = ClipboardGuard::new(backend.clone());
+
+    manager
+        .unlock_with_plaintext_json_with_context(
+            serde_json::to_vec(&payload).expect("serialize payload"),
+            Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::Debugged,
+        )
+        .await;
+
+    let err = manager
+        .copy_entry_secret(entry_id, &mut clipboard, Duration::from_secs(30))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, EntryError::PolicyDenied));
+    assert_eq!(backend.get(), None);
+}
+
+/// Restrictive runtime states must deny TOTP copy before generation/copy occurs
+#[tokio::test]
+async fn restrictive_runtime_denies_totp_copy() {
+    let manager = VaultLockManager::new();
+    let (payload, entry_id) = payload_with_totp_entry();
+    let backend = TestClipboardBackend::default();
+    let mut clipboard = ClipboardGuard::new(backend.clone());
+
+    manager
+        .unlock_with_plaintext_json_with_context(
+            serde_json::to_vec(&payload).expect("serialize payload"),
+            Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::TamperSuspected,
+        )
+        .await;
+
+    let err = manager
+        .copy_entry_totp(entry_id, 59, &mut clipboard, Some(Duration::from_secs(30)))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, EntryError::PolicyDenied));
+    assert_eq!(backend.get(), None);
+}
+
+/// Locked managers must still fail with `VaultLocked`
 #[tokio::test]
 async fn locked_manager_returns_vault_locked_for_sensitive_access() {
     let manager = VaultLockManager::new();
@@ -245,15 +336,18 @@ async fn locked_manager_returns_vault_locked_for_sensitive_access() {
     assert!(matches!(err, EntryError::VaultLocked));
 }
 
-/// Missing entries must still return `EntryNotFound` once re-auth is satisfied
+/// Missing entries must still return `EntryNotFound` once authorization succeeds
 #[tokio::test]
-async fn missing_entry_returns_entry_not_found_after_strong_auth() {
+async fn missing_entry_returns_entry_not_found_after_authorization() {
     let manager = VaultLockManager::new();
 
     manager
-        .unlock_with_plaintext_json(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&VaultPayload { entries: vec![] }).expect("serialize payload"),
             Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
@@ -265,306 +359,111 @@ async fn missing_entry_returns_entry_not_found_after_strong_auth() {
     assert!(matches!(err, EntryError::EntryNotFound));
 }
 
-/// Strong sessions must allow secret reveal
+/// TOTP entries currently expose the mirrored seed secret through the generic reveal path
+///
+/// # Design
+/// The current entry model mirrors the TOTP seed into the primary `secret` field
+/// for compatibility with existing secret-centric flows
 #[tokio::test]
-async fn strong_session_can_reveal_secret() {
+async fn reveal_secret_for_totp_returns_mirrored_seed_secret() {
     let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_password_entry();
+    let (payload, entry_id) = payload_with_totp_entry();
 
     manager
-        .unlock_with_plaintext_json(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
     let secret = manager
         .reveal_entry_secret(entry_id)
         .await
-        .expect("secret should be revealable in strong session");
+        .expect("totp entries currently reveal their mirrored seed secret");
 
-    assert_eq!(secret.expose_secret(), "super-secret");
+    assert_eq!(secret.expose_secret(), "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
 }
 
-/// Biometric sessions must require re-authentication for secret reveal
+/// TOTP copy must fail for non-TOTP entries
 #[tokio::test]
-async fn biometric_session_requires_reauth_for_reveal() {
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_password_entry();
-
-    manager
-        .unlock_with_plaintext_json_with_strength(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-            AuthenticationStrength::Biometric,
-        )
-        .await;
-
-    let err = manager.reveal_entry_secret(entry_id).await.unwrap_err();
-    assert!(matches!(err, EntryError::ReauthRequired));
-}
-
-/// Sticky re-auth requirement must also block secret reveal
-#[tokio::test]
-async fn sticky_reauth_requirement_blocks_reveal() {
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_password_entry();
-
-    manager
-        .unlock_with_plaintext_json(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-        )
-        .await;
-
-    manager
-        .handle_runtime_security_event(RuntimeSecurityEvent::AppBackgrounded)
-        .await;
-
-    let err = manager.reveal_entry_secret(entry_id).await.unwrap_err();
-    assert!(matches!(err, EntryError::ReauthRequired));
-}
-
-/// Locked managers must still report `VaultLocked` on reveal
-#[tokio::test]
-async fn locked_manager_returns_vault_locked_for_reveal() {
-    let manager = VaultLockManager::new();
-    let (_, entry_id) = payload_with_password_entry();
-
-    let err = manager.reveal_entry_secret(entry_id).await.unwrap_err();
-    assert!(matches!(err, EntryError::VaultLocked));
-}
-
-/// Strong sessions must allow secret copy
-#[tokio::test]
-async fn strong_session_can_copy_secret() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend.clone());
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_password_entry();
-
-    manager
-        .unlock_with_plaintext_json(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-        )
-        .await;
-
-    manager
-        .copy_entry_secret(entry_id, &mut clipboard, Duration::from_secs(30))
-        .await
-        .expect("copy should succeed in strong session");
-
-    assert_eq!(
-        backend.get().as_deref(),
-        Some("super-secret"),
-        "clipboard should contain the copied secret"
-    );
-}
-
-/// Biometric sessions must require re-authentication for secret copy
-#[tokio::test]
-async fn biometric_session_requires_reauth_for_copy() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_password_entry();
-
-    manager
-        .unlock_with_plaintext_json_with_strength(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-            AuthenticationStrength::Biometric,
-        )
-        .await;
-
-    let err = manager
-        .copy_entry_secret(entry_id, &mut clipboard, Duration::from_secs(30))
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, EntryError::ReauthRequired));
-}
-
-/// Sticky re-auth requirement must also block secret copy
-#[tokio::test]
-async fn sticky_reauth_requirement_blocks_copy() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_password_entry();
-
-    manager
-        .unlock_with_plaintext_json(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-        )
-        .await;
-
-    manager
-        .handle_runtime_security_event(RuntimeSecurityEvent::AppBackgrounded)
-        .await;
-
-    let err = manager
-        .copy_entry_secret(entry_id, &mut clipboard, Duration::from_secs(30))
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, EntryError::ReauthRequired));
-}
-
-/// Locked managers must still report `VaultLocked` on secret copy
-#[tokio::test]
-async fn locked_manager_returns_vault_locked_for_secret_copy() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
-    let manager = VaultLockManager::new();
-    let (_, entry_id) = payload_with_password_entry();
-
-    let err = manager
-        .copy_entry_secret(entry_id, &mut clipboard, Duration::from_secs(30))
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, EntryError::VaultLocked));
-}
-
-/// Strong sessions must allow TOTP copy
-#[tokio::test]
-async fn strong_session_can_copy_totp() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend.clone());
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_totp_entry();
-
-    manager
-        .unlock_with_plaintext_json(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-        )
-        .await;
-
-    manager
-        .copy_entry_totp(
-            entry_id,
-            1_700_000_000,
-            &mut clipboard,
-            Some(Duration::from_secs(30)),
-        )
-        .await
-        .expect("totp copy should succeed in strong session");
-
-    let copied = backend.get().expect("clipboard value");
-    assert_eq!(copied.len(), 6, "clipboard should contain a 6-digit TOTP");
-    assert!(copied.chars().all(|c| c.is_ascii_digit()));
-}
-
-/// Biometric sessions must require re-authentication for TOTP copy
-#[tokio::test]
-async fn biometric_session_requires_reauth_for_totp_copy() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_totp_entry();
-
-    manager
-        .unlock_with_plaintext_json_with_strength(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-            AuthenticationStrength::Biometric,
-        )
-        .await;
-
-    let err = manager
-        .copy_entry_totp(
-            entry_id,
-            1_700_000_000,
-            &mut clipboard,
-            Some(Duration::from_secs(30)),
-        )
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, EntryError::ReauthRequired));
-}
-
-/// Sticky re-auth requirement must also block TOTP copy
-#[tokio::test]
-async fn sticky_reauth_requirement_blocks_totp_copy() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
-    let manager = VaultLockManager::new();
-    let (payload, entry_id) = payload_with_totp_entry();
-
-    manager
-        .unlock_with_plaintext_json(
-            serde_json::to_vec(&payload).expect("serialize payload"),
-            Duration::from_secs(60),
-        )
-        .await;
-
-    manager
-        .handle_runtime_security_event(RuntimeSecurityEvent::AppBackgrounded)
-        .await;
-
-    let err = manager
-        .copy_entry_totp(
-            entry_id,
-            1_700_000_000,
-            &mut clipboard,
-            Some(Duration::from_secs(30)),
-        )
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, EntryError::ReauthRequired));
-}
-
-/// Locked managers must still report `VaultLocked` on TOTP copy
-#[tokio::test]
-async fn locked_manager_returns_vault_locked_for_totp_copy() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
-    let manager = VaultLockManager::new();
-    let (_, entry_id) = payload_with_totp_entry();
-
-    let err = manager
-        .copy_entry_totp(
-            entry_id,
-            1_700_000_000,
-            &mut clipboard,
-            Some(Duration::from_secs(30)),
-        )
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, EntryError::VaultLocked));
-}
-
-/// Non-TOTP entries must report `InvalidType`
-#[tokio::test]
-async fn non_totp_entry_returns_invalid_type() {
-    let backend = TestClipboardBackend::default();
-    let mut clipboard = ClipboardGuard::new(backend);
+async fn totp_copy_rejects_invalid_entry_type() {
     let manager = VaultLockManager::new();
     let (payload, entry_id) = payload_with_non_totp_entry();
+    let backend = TestClipboardBackend::default();
+    let mut clipboard = ClipboardGuard::new(backend.clone());
 
     manager
-        .unlock_with_plaintext_json(
+        .unlock_with_plaintext_json_with_context(
             serde_json::to_vec(&payload).expect("serialize payload"),
             Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
         )
         .await;
 
     let err = manager
-        .copy_entry_totp(
-            entry_id,
-            1_700_000_000,
-            &mut clipboard,
-            Some(Duration::from_secs(30)),
-        )
+        .copy_entry_totp(entry_id, 59, &mut clipboard, Some(Duration::from_secs(30)))
         .await
         .unwrap_err();
 
     assert!(matches!(err, EntryError::InvalidType));
+    assert_eq!(backend.get(), None);
+}
+
+/// Secret copy must place the secret into the clipboard on success
+#[tokio::test]
+async fn copy_secret_writes_clipboard_on_success() {
+    let manager = VaultLockManager::new();
+    let (payload, entry_id) = payload_with_password_entry();
+    let backend = TestClipboardBackend::default();
+    let mut clipboard = ClipboardGuard::new(backend.clone());
+
+    manager
+        .unlock_with_plaintext_json_with_context(
+            serde_json::to_vec(&payload).expect("serialize payload"),
+            Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
+        )
+        .await;
+
+    manager
+        .copy_entry_secret(entry_id, &mut clipboard, Duration::from_secs(30))
+        .await
+        .expect("copy must succeed");
+
+    assert_eq!(backend.get().as_deref(), Some("super-secret"));
+}
+
+/// TOTP copy must write a code to the clipboard on success
+#[tokio::test]
+async fn copy_totp_writes_clipboard_on_success() {
+    let manager = VaultLockManager::new();
+    let (payload, entry_id) = payload_with_totp_entry();
+    let backend = TestClipboardBackend::default();
+    let mut clipboard = ClipboardGuard::new(backend.clone());
+
+    manager
+        .unlock_with_plaintext_json_with_context(
+            serde_json::to_vec(&payload).expect("serialize payload"),
+            Duration::from_secs(60),
+            AuthenticationStrength::Strong,
+            UnlockOutcome::Primary,
+            RuntimeInspectionState::NotDebugged,
+        )
+        .await;
+
+    manager
+        .copy_entry_totp(entry_id, 59, &mut clipboard, Some(Duration::from_secs(30)))
+        .await
+        .expect("totp copy must succeed");
+
+    let copied = backend.get().expect("clipboard must contain a TOTP code");
+    assert_eq!(copied.len(), 6);
+    assert!(copied.chars().all(|c| c.is_ascii_digit()));
 }

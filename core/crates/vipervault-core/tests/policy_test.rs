@@ -5,13 +5,10 @@
 //!
 //! # Purpose
 //! These tests verify that the centralized runtime policy remains conservative
-//! and deterministic across unlock outcomes and runtime inspection states
-//!
-//! # Security
-//! The policy layer is responsible for denying or degrading sensitive
-//! operations under decoy sessions and restrictive runtime states
+//! and deterministic across unlock outcomes, runtime inspection states and
+//! sensitive operation categories
 
-use vipervault_core::core::{PolicyContext, RuntimeInspectionState};
+use vipervault_core::core::{PolicyContext, RuntimeInspectionState, SensitiveOperation};
 use vipervault_core::vault::duress::UnlockOutcome;
 
 /// Build a policy context for tests
@@ -33,10 +30,18 @@ fn primary_not_debugged_allows_sensitive_operations() {
     assert!(policy.allow_biometric_unlock());
     assert!(policy.allow_clipboard_copy());
     assert!(policy.allow_totp_copy());
+    assert!(policy.allow_secret_reveal());
     assert!(policy.allow_signed_backup_transfer());
     assert!(policy.allow_plaintext_export());
     assert!(policy.allow_plaintext_import());
     assert!(policy.allow_otpauth_import());
+
+    assert!(policy.allow_sensitive_operation(SensitiveOperation::Export));
+    assert!(policy.allow_sensitive_operation(SensitiveOperation::SignedBackupTransfer));
+    assert!(policy.allow_sensitive_operation(SensitiveOperation::RevealSecret));
+    assert!(policy.allow_sensitive_operation(SensitiveOperation::CopySecret));
+    assert!(policy.allow_sensitive_operation(SensitiveOperation::CopyTotp));
+    assert!(policy.allow_sensitive_operation(SensitiveOperation::ChangeSecuritySettings));
 
     assert!(!policy.requires_short_autolock());
     assert!(!policy.requires_strong_reauth_for_sensitive_ops());
@@ -56,10 +61,18 @@ fn decoy_not_debugged_denies_sensitive_operations() {
     assert!(!policy.allow_biometric_unlock());
     assert!(!policy.allow_clipboard_copy());
     assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_secret_reveal());
     assert!(!policy.allow_signed_backup_transfer());
     assert!(!policy.allow_plaintext_export());
     assert!(!policy.allow_plaintext_import());
     assert!(!policy.allow_otpauth_import());
+
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::Export));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::SignedBackupTransfer));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::RevealSecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopySecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopyTotp));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::ChangeSecuritySettings));
 
     assert!(!policy.requires_short_autolock());
     assert!(!policy.requires_strong_reauth_for_sensitive_ops());
@@ -78,10 +91,18 @@ fn primary_debugged_denies_sensitive_operations() {
     assert!(!policy.allow_biometric_unlock());
     assert!(!policy.allow_clipboard_copy());
     assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_secret_reveal());
     assert!(!policy.allow_signed_backup_transfer());
     assert!(!policy.allow_plaintext_export());
     assert!(!policy.allow_plaintext_import());
     assert!(!policy.allow_otpauth_import());
+
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::Export));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::SignedBackupTransfer));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::RevealSecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopySecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopyTotp));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::ChangeSecuritySettings));
 
     assert!(policy.requires_short_autolock());
     assert!(policy.requires_strong_reauth_for_sensitive_ops());
@@ -100,10 +121,18 @@ fn primary_unknown_denies_sensitive_operations() {
     assert!(!policy.allow_biometric_unlock());
     assert!(!policy.allow_clipboard_copy());
     assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_secret_reveal());
     assert!(!policy.allow_signed_backup_transfer());
     assert!(!policy.allow_plaintext_export());
     assert!(!policy.allow_plaintext_import());
     assert!(!policy.allow_otpauth_import());
+
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::Export));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::SignedBackupTransfer));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::RevealSecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopySecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopyTotp));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::ChangeSecuritySettings));
 
     assert!(policy.requires_short_autolock());
     assert!(policy.requires_strong_reauth_for_sensitive_ops());
@@ -128,16 +157,24 @@ fn primary_tamper_suspected_denies_sensitive_operations() {
     assert!(!policy.allow_biometric_unlock());
     assert!(!policy.allow_clipboard_copy());
     assert!(!policy.allow_totp_copy());
+    assert!(!policy.allow_secret_reveal());
     assert!(!policy.allow_signed_backup_transfer());
     assert!(!policy.allow_plaintext_export());
     assert!(!policy.allow_plaintext_import());
     assert!(!policy.allow_otpauth_import());
 
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::Export));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::SignedBackupTransfer));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::RevealSecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopySecret));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::CopyTotp));
+    assert!(!policy.allow_sensitive_operation(SensitiveOperation::ChangeSecuritySettings));
+
     assert!(policy.requires_short_autolock());
     assert!(policy.requires_strong_reauth_for_sensitive_ops());
 }
 
-/// The state-specific helpers must remain aligned with the context-bound helpers
+/// The state-specific export helpers must remain aligned with the context-bound helpers
 #[test]
 fn state_specific_export_helpers_match_context_helpers() {
     let clean = policy(UnlockOutcome::Primary, RuntimeInspectionState::NotDebugged);

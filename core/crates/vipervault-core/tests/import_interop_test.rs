@@ -26,11 +26,11 @@
 use vipervault_core::core::{PolicyContext, RuntimeInspectionState};
 use vipervault_core::entries::{EntryType, VaultEntry};
 use vipervault_core::import::{
-    commit_quarantined_import_into_payload, import_interop_quarantine, ImportError, ImportIntent,
-    InteropFormat,
+    ImportError, ImportIntent, InteropFormat, commit_quarantined_import_into_payload,
+    import_interop_quarantine,
 };
-use vipervault_core::vault::duress::UnlockOutcome;
 use vipervault_core::vault::VaultPayload;
+use vipervault_core::vault::duress::UnlockOutcome;
 
 /// Use deterministic policy construction for tests
 fn primary_policy() -> PolicyContext {
@@ -107,7 +107,7 @@ fn interop_quarantine_denied_under_unknown_runtime() {
         InteropFormat::OtpAuthTotpUriList,
         interop_bytes(),
     )
-        .unwrap_err();
+    .unwrap_err();
 
     assert!(matches!(err, ImportError::PolicyDenied));
 }
@@ -121,7 +121,7 @@ fn interop_quarantine_denied_under_tamper_suspected_runtime() {
         InteropFormat::OtpAuthTotpUriList,
         interop_bytes(),
     )
-        .unwrap_err();
+    .unwrap_err();
 
     assert!(matches!(err, ImportError::PolicyDenied));
 }
@@ -185,7 +185,7 @@ fn interop_quarantine_accepts_multiple_distinct_entries() {
         InteropFormat::OtpAuthTotpUriList,
         interop_bytes_two_entries(),
     )
-        .expect("quarantine import");
+    .expect("quarantine import");
 
     assert_eq!(q.payload().entries.len(), 2);
     assert_eq!(q.payload().entries[0].meta.entry_type, EntryType::Totp);
@@ -282,7 +282,7 @@ fn interop_commit_preserves_preexisting_entries_with_multiple_imports() {
         InteropFormat::OtpAuthTotpUriList,
         interop_bytes_two_entries(),
     )
-        .expect("quarantine");
+    .expect("quarantine");
 
     let mut existing = VaultPayload {
         entries: vec![
@@ -293,7 +293,7 @@ fn interop_commit_preserves_preexisting_entries_with_multiple_imports() {
                 "super-secret".to_string(),
                 None,
             )
-                .expect("entry"),
+            .expect("entry"),
         ],
     };
 
@@ -330,7 +330,7 @@ fn interop_commit_denied_under_unknown_runtime() {
         InteropFormat::OtpAuthTotpUriList,
         interop_bytes(),
     )
-        .expect("quarantine");
+    .expect("quarantine");
 
     let mut existing = VaultPayload { entries: vec![] };
 
@@ -348,7 +348,7 @@ fn interop_commit_denied_under_tamper_suspected_runtime() {
         InteropFormat::OtpAuthTotpUriList,
         interop_bytes(),
     )
-        .expect("quarantine");
+    .expect("quarantine");
 
     let mut existing = VaultPayload { entries: vec![] };
 

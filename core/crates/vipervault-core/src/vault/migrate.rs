@@ -11,9 +11,11 @@
 //! - Preserves `vault_id` and `schema_version`
 //! - Uses fresh salts and nonces for both primary and decoy branches
 //! - Avoids panic-based oracles
+//! - Reuses the decrypted primary plaintext JSON directly after validation to avoid
+//!   an unnecessary deserialize -> serialize cycle for the primary branch
 
 use super::create::VaultKdfPolicy;
-use super::duress::encrypt_duress_envelope;
+use super::duress::encrypt_duress_envelope_from_plaintext_json;
 use super::error::VaultParseError;
 use super::types::{
     AeadSuite, CryptoHeader, DualCiphertextEnvelope, DualVaultHeader, KdfParams, SALT_LEN,
@@ -22,6 +24,7 @@ use super::types::{
 use crate::memory::MasterPassword;
 use rand::TryRng;
 use rand::rngs::SysRng;
+use zeroize::Zeroizing;
 
 /// Convert an encrypted vault into a duress-enabled vault
 ///
@@ -77,7 +80,7 @@ pub fn enable_duress_on_vault(
     let legacy_header_bytes =
         serde_json::to_vec(&vault.header).map_err(|_| VaultParseError::Serialize)?;
 
-    let plaintext = crate::crypto::aead::decrypt_xchacha20poly1305(
+    let primary_plaintext_json = crate::crypto::aead::decrypt_xchacha20poly1305(
         &primary_key,
         &vault.header.crypto.nonce,
         legacy_ciphertext,
@@ -85,8 +88,17 @@ pub fn enable_duress_on_vault(
     )
     .map_err(|_| VaultParseError::AuthFailed)?;
 
-    let primary_payload: VaultPayload =
-        serde_json::from_slice(&plaintext).map_err(|_| VaultParseError::InvalidPayload)?;
+    // Validate the decrypted payload structure before re-encryption
+    //
+    // # Security
+    // The validated plaintext bytes are reused directly for the primary branch
+    // to avoid creating another serialized plaintext copy
+    let _validated_primary_payload: VaultPayload =
+        serde_json::from_slice(primary_plaintext_json.as_slice())
+            .map_err(|_| VaultParseError::InvalidPayload)?;
+
+    let decoy_plaintext_json =
+        Zeroizing::new(serde_json::to_vec(decoy_payload).map_err(|_| VaultParseError::Serialize)?);
 
     // Generate fresh salts and nonces for duress mode
     let mut salt1 = [0u8; SALT_LEN];
@@ -138,13 +150,13 @@ pub fn enable_duress_on_vault(
         .as_ref()
         .ok_or(VaultParseError::InvalidHeader)?;
 
-    let envelope: DualCiphertextEnvelope = encrypt_duress_envelope(
+    let envelope: DualCiphertextEnvelope = encrypt_duress_envelope_from_plaintext_json(
         &header_bytes,
         duress_ref,
         primary_password,
         decoy_password,
-        &primary_payload,
-        decoy_payload,
+        primary_plaintext_json.as_slice(),
+        decoy_plaintext_json.as_slice(),
     )?;
 
     let ciphertext = serde_json::to_vec(&envelope).map_err(|_| VaultParseError::Serialize)?;

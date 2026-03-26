@@ -16,7 +16,7 @@
 //! The runtime inspection layer is a signal source for policy decisions \
 //! Ambiguous states must remain conservative and deterministic
 
-use vipervault_core::core::{current_runtime_inspection_state, RuntimeInspectionState};
+use vipervault_core::core::{RuntimeInspectionState, current_runtime_inspection_state};
 
 /// A clean runtime state must not be restrictive
 #[test]

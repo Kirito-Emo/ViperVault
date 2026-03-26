@@ -6,8 +6,14 @@
 //! # Security design
 //! - All user-visible fields (including title and notes) are encrypted at rest
 //! - Sensitive fields are wrapped in `secrecy`/`zeroize` types in memory
-//! - Manual serde via internal DTOs to avoid accidentally deriving serde on secret wrappers
-//! - Entry-type invariants are enforced (e.g., TOTP entries must carry TOTP data)
+//! - Manual serde via internal DTOs avoids deriving serde directly on secret wrappers
+//! - Entry-type invariants are enforced after construction and after deserialization
+//!
+//! # Important note
+//! The serde DTO boundary is still a plaintext materialization point because JSON
+//! deserialization necessarily constructs temporary owned strings and byte buffers \
+//! This file confines that behaviour to a narrow serialization boundary, but it
+//! does not eliminate it entirely
 
 use crate::entries::error::EntryError;
 use crate::entries::validate::{
@@ -137,8 +143,8 @@ pub struct EntryMetadata {
 /// A minimal UI-facing entry summary (still sensitive)
 ///
 /// # Security
-/// - This is created only after unlocking the vault
-/// - `title` is kept as `SecretString` to avoid accidental exposure and to enable zeroization
+/// This value is produced only after unlocking the vault and still keeps the
+/// title inside a secret wrapper to reduce accidental disclosure
 #[derive(Debug, Clone)]
 pub struct EntrySummary {
     /// Entry identifier
@@ -207,7 +213,7 @@ impl EntryView {
     /// Expose the primary secret
     ///
     /// # Security
-    /// Use only at trusted boundaries (clipboard, autofill)
+    /// Use only at trusted boundaries (e.g. clipboard, autofill)
     pub fn expose_secret(&self) -> &str {
         self.secret.expose_secret()
     }
@@ -263,7 +269,7 @@ pub enum EntryUpdate {
 ///
 /// # Security
 /// - All user data is encrypted at rest
-/// - All secrets are wiped on drop
+/// - All in-memory secret fields are stored in secrecy-aware wrappers (wiped on drop)
 #[derive(Debug)]
 pub struct EntrySecret {
     /// User-visible title
@@ -571,10 +577,8 @@ impl VaultEntry {
 /// Serializable DTO for [`TotpSecret`]
 ///
 /// # Security
-/// This DTO necessarily materializes plaintext `String` fields
-/// while crossing the serde boundary \
-/// This is an unavoidable compatibility layer for JSON serialization
-/// and should remain confined to serialization/deserialization boundaries only
+/// This DTO necessarily materializes plaintext strings while crossing the serde boundary \
+/// The exposure is confined to serialization and deserialization only
 #[derive(Debug, Serialize, Deserialize)]
 struct TotpSecretDto {
     /// Optional issuer
